@@ -43,6 +43,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Install additional dependencies
+      run: |
+        pip install selenium PySide6
+
     - name: Verify PyInstaller installation
       run: |
         python -m pip show pyinstaller || python -m pip install pyinstaller
@@ -56,13 +60,13 @@ jobs:
           --hidden-import=PySide6.QtWidgets `
           main.py
 
-    - name: List dist directory
+    - name: List build directory
       run: |
         dir dist
 
     - name: Verify executable exists
       run: |
-        if (-not (Test-Path "dist\ComplianceToolbox.exe")) {
+        if (-not (Test-Path "dist\ComplianceToolbox\ComplianceToolbox.exe")) {
             Write-Output "Executable not found!"
             exit 1
         }
@@ -71,7 +75,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: ComplianceToolbox
-        path: dist/ComplianceToolbox.exe
+        path: dist/ComplianceToolbox
 
     # 自动发布到GitHub Releases
     - name: Create Release
@@ -93,6 +97,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: dist/ComplianceToolbox.exe
+        asset_path: dist/ComplianceToolbox/ComplianceToolbox.exe
         asset_name: ComplianceToolbox.exe
         asset_content_type: application/octet-stream
