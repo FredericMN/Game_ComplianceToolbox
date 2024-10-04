@@ -9,6 +9,4 @@ webdriver-manager
 pandas
 xlrd
 requests
-flake8
-pytest
 pyinstaller
