@@ -50,7 +50,7 @@ jobs:
 
     - name: Build executable with PyInstaller
       run: |
-        pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
+        python -m pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
           --add-data "resources;resources" --add-data "styles;styles" `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
