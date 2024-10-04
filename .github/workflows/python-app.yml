@@ -44,7 +44,7 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
     - name: Test with pytest
-      continue-on-error: true  # 允许测试失败，不会中断工作流
+      continue-on-error: true  # 允许测试失败，不会中断工作流。
       run: |
         pytest || echo "No tests were run."
 
