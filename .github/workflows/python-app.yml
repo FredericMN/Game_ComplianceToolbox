@@ -9,7 +9,7 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -45,7 +45,7 @@ jobs:
 
     - name: Install additional dependencies
       run: |
-        pip install selenium PySide6
+        pip install selenium PySide6 psutil
 
     - name: Verify PyInstaller installation
       run: |
