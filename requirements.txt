@@ -3,4 +3,10 @@ qfluentwidgets
 qframelesswindow
 python-docx
 openpyxl
+psutil
+selenium
+webdriver-manager
+pandas
+xlrd
+requests
 
