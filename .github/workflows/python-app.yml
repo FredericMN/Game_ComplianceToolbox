@@ -50,17 +50,28 @@ jobs:
           --hidden-import=PySide6 --hidden-import=PySide6.QtCore `
           --hidden-import=PySide6.QtGui --hidden-import=PySide6.QtWidgets `
           main.py
-     # working-directory: ./  # 根据项目结构调整
 
-    - name: Upload build artifacts
+    - name: List dist directory
+      run: |
+        dir dist
+
+    - name: Verify executable exists
+      run: |
+        if not exist "dist\ComplianceToolbox.exe" (
+          echo "Executable not found!"
+          exit 1
+        )
+
+    - name: Upload build artifact
       uses: actions/upload-artifact@v3
       with:
         name: ComplianceToolbox
-        path: project-01/dist/ComplianceToolbox.exe  # PyInstaller生成的exe文件路径
+        path: dist/ComplianceToolbox.exe
 
-    # 可选：自动发布到GitHub Releases
+    # 自动发布到GitHub Releases
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
+      id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,6 +88,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: project-01/dist/ComplianceToolbox.exe
+        asset_path: dist/ComplianceToolbox.exe
         asset_name: ComplianceToolbox.exe
         asset_content_type: application/octet-stream
