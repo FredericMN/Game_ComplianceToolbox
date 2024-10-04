@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
 
-    runs-on: windows-latest  # 使用Windows Runner
+    runs-on: windows-2022  # 使用Windows Server 2022 Runner
 
     steps:
     - uses: actions/checkout@v4
@@ -33,7 +33,8 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install flake8 pytest pyinstaller requests
+        # 移除以下行，因为所有依赖应在requirements.txt中列出
+        # pip install flake8 pytest pyinstaller requests
 
     - name: Lint with flake8
       run: |
@@ -52,8 +53,8 @@ jobs:
         pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
           --add-data "resources;resources" --add-data "styles;styles" `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
-          --hidden-import=PySide6 --hidden-import=PySide6.QtCore `
-          --hidden-import=PySide6.QtGui --hidden-import=PySide6.QtWidgets `
+          --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
+          --hidden-import=PySide6.QtWidgets `
           main.py
 
     - name: List dist directory
@@ -62,10 +63,10 @@ jobs:
 
     - name: Verify executable exists
       run: |
-        if not exist "dist\ComplianceToolbox.exe" (
-          echo "Executable not found!"
-          exit 1
-        )
+        if (-not (Test-Path "dist\ComplianceToolbox.exe")) {
+            Write-Output "Executable not found!"
+            exit 1
+        }
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v3
