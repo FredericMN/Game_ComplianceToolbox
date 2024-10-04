@@ -1,0 +1,82 @@
+name: Python application
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*.*.*'  # 监听以v开头的标签，如v1.0.0
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+
+    runs-on: windows-latest  # 使用Windows Runner
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install flake8 pytest pyinstaller requests
+
+    - name: Lint with flake8
+      run: |
+        # 停止构建如果有语法错误或未定义的名称
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero将所有错误视为警告
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Test with pytest
+      run: |
+        pytest
+
+    - name: Build executable with PyInstaller
+      run: |
+        pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
+          --add-data "resources;resources" --add-data "styles;styles" `
+          --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
+          --hidden-import=PySide6 --hidden-import=PySide6.QtCore `
+          --hidden-import=PySide6.QtGui --hidden-import=PySide6.QtWidgets `
+          main.py
+     # working-directory: ./  # 根据项目结构调整
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ComplianceToolbox
+        path: project-01/dist/ComplianceToolbox.exe  # PyInstaller生成的exe文件路径
+
+    # 可选：自动发布到GitHub Releases
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: project-01/dist/ComplianceToolbox.exe
+        asset_name: ComplianceToolbox.exe
+        asset_content_type: application/octet-stream
