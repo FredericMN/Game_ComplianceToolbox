@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
 
-    runs-on: windows-2022  # 使用Windows Server 2022 Runner
+    runs-on: windows-latest  # 使用Windows Server 2022 Runner
 
     steps:
     - uses: actions/checkout@v4
