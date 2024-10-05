@@ -45,7 +45,7 @@ jobs:
 
     - name: Install additional dependencies
       run: |
-        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller docx -i https://pypi.org/simple/
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx -i https://pypi.org/simple/
 
     - name: Verify PyInstaller installation
       run: |
@@ -59,7 +59,7 @@ jobs:
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
           --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
           --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
-          --hidden-import=docx `
+          --hidden-import=docx --hidden-import=python-docx `
           main.py
 
     - name: List build directory
