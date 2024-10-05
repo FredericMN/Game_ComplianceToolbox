@@ -45,7 +45,7 @@ jobs:
 
     - name: Install additional dependencies
       run: |
-        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" -i https://pypi.org/simple/
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil -i https://pypi.org/simple/
 
     - name: Verify PyInstaller installation
       run: |
