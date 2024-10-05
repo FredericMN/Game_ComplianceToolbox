@@ -11,6 +11,6 @@
 - `utils/`: 辅助工具函数或类。
 - `styles/`: 样式表文件。
 
-## 安装依赖--当前依赖不完整。
+## 安装依赖
 ```bash
 pip install -r requirements.txt
