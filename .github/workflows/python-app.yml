@@ -9,7 +9,7 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: read
+  contents: write  # 改为 write 权限，以允许发布 Release
   actions: write
 
 jobs:
