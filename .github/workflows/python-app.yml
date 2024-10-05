@@ -9,7 +9,7 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: write  # 改为 write 权限，以允许发布 Release
+  contents: write
   actions: write
 
 jobs:
@@ -73,11 +73,15 @@ jobs:
             exit 1
         }
 
+    - name: Compress build output
+      run: |
+        Compress-Archive -Path "dist/ComplianceToolbox/*" -DestinationPath "dist/ComplianceToolbox.zip"
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ComplianceToolbox
-        path: dist/ComplianceToolbox
+        path: dist/ComplianceToolbox.zip
 
     # 自动发布到GitHub Releases
     - name: Create Release
@@ -99,6 +103,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: dist/ComplianceToolbox/ComplianceToolbox.exe
-        asset_name: ComplianceToolbox.exe
-        asset_content_type: application/octet-stream
+        asset_path: dist/ComplianceToolbox.zip
+        asset_name: ComplianceToolbox.zip
+        asset_content_type: application/zip
