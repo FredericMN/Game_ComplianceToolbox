@@ -1,6 +1,4 @@
-# project-01/window/main_window.py
-
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QStackedWidget, QMessageBox  # 添加 QMessageBox
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QStackedWidget, QMessageBox
 from PySide6.QtGui import QIcon
 from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, FluentIcon as FIF
@@ -15,7 +13,9 @@ from interfaces.crawler_interface import CrawlerInterface
 from interfaces.empty_interface import EmptyInterface
 from interfaces.settings_interface import SettingsInterface
 from interfaces.version_matching_interface import VersionMatchingInterface
-from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface  # 新增导入
+from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface
+from utils.version_checker import VersionChecker, VersionCheckWorker
+from PySide6.QtCore import QThread
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -31,6 +31,7 @@ class MainWindow(FramelessWindow):
         self.setTitleBar(StandardTitleBar(self))
         self.setWindowTitle("合规工具箱")
         self.setWindowIcon(QIcon(resource_path('resources/logo.ico')))  # 确保 resource_path 在此之前定义
+        self.update_thread = None  # 初始化更新线程
 
         # 主布局
         self.hBoxLayout = QHBoxLayout(self)
@@ -85,7 +86,7 @@ class MainWindow(FramelessWindow):
         )
 
         self.add_sub_interface(
-            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"  # 使用合适的图标，如 LIST
+            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"
         )
 
         self.add_sub_interface(
@@ -139,3 +140,43 @@ class MainWindow(FramelessWindow):
             QMessageBox.warning(self, "环境检测", "环境检测过程中存在问题，请根据提示进行处理。")
         else:
             QMessageBox.information(self, "环境检测", "恭喜，环境检测和配置完成！")
+        # 在环境检测完成后，启动版本检测
+        self.check_for_updates()
+
+    def check_for_updates(self):
+        # 如果已有线程在运行，先停止
+        if self.update_thread and self.update_thread.isRunning():
+            self.update_thread.quit()
+            self.update_thread.wait()
+
+        self.update_thread = QThread()
+        self.version_checker = VersionChecker()
+        self.worker = VersionCheckWorker(self.version_checker)
+        self.worker.moveToThread(self.update_thread)
+
+        self.update_thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.on_update_check_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.update_thread.finished.connect(self.update_thread.deleteLater)
+
+        self.update_thread.start()
+
+    def on_update_check_finished(self, is_new_version, latest_version, download_url, release_notes):
+        if is_new_version:
+            msg = (
+                f"当前版本: {self.version_checker.current_version}\n"
+                f"最新版本: {latest_version}\n\n"
+                f"更新内容:\n{release_notes}\n\n"
+                f"是否前往更新？"
+            )
+            reply = QMessageBox.question(
+                self,
+                "发现新版本",
+                msg,
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                # 切换到设置界面
+                self.switch_to(self.settingsInterface)
+                # 开始下载和更新过程
+                self.settingsInterface.handle_check_update()

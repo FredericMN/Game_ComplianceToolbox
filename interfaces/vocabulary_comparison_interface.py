@@ -17,6 +17,7 @@ class VocabularyComparisonInterface(BaseInterface):
         self.a_file_path = ""
         self.b_file_path = ""
         self.thread = None  # 初始化线程变量
+        self.init_ui()
 
     def init_ui(self):
         # 说明文本

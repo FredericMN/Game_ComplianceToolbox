@@ -13,6 +13,7 @@ class DetectionToolInterface(BaseInterface):
         # 初始化词汇列表
         self.violent_words, self.inducing_words = initialize_words()
         super().__init__(parent)
+        self.init_ui()
 
     def init_ui(self):
         # 顶部布局，包含两个输入区域

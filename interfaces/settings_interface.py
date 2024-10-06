@@ -1,13 +1,19 @@
-# project-01/interfaces/settings_interface.py
+# interfaces/settings_interface.py
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QPushButton, QFrame, QMessageBox
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QPushButton, QFrame, QMessageBox, QTextEdit, QApplication
 from .base_interface import BaseInterface
+from utils.version import __version__
+from utils.version_checker import VersionChecker, VersionCheckWorker, DownloadWorker
 
 class SettingsInterface(BaseInterface):
     """设定界面"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.current_version = __version__
+        self.update_thread = None  # 重命名线程变量
+        self.download_thread = None  # 初始化下载线程变量
+        self.init_ui()
 
     def init_ui(self):
         # 创建主垂直布局
@@ -32,8 +38,14 @@ class SettingsInterface(BaseInterface):
         # 连接按钮点击信号到处理函数
         self.check_update_button.clicked.connect(self.handle_check_update)
 
-        # 添加按钮到主布局
+        # 信息输出区域
+        self.output_text_edit = QTextEdit()
+        self.output_text_edit.setReadOnly(True)
+        self.output_text_edit.setPlaceholderText("信息输出区域")
+
+        # 添加按钮和输出区域到主布局
         main_layout.addWidget(self.check_update_button)
+        main_layout.addWidget(self.output_text_edit)
 
         # 创建分割线
         separator = QFrame()
@@ -51,7 +63,7 @@ class SettingsInterface(BaseInterface):
         developer_label.setStyleSheet("font-size: 14px; color: #555555;")
 
         # 创建当前版本标签
-        version_label = QLabel("当前版本：1.0.0")
+        version_label = QLabel(f"当前版本：{self.current_version}")
         version_label.setAlignment(Qt.AlignCenter)
         version_label.setStyleSheet("font-size: 14px; color: #555555;")
 
@@ -61,16 +73,18 @@ class SettingsInterface(BaseInterface):
         update_log_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333333;")
 
         # 创建更新日志内容
-        update_log_content = QLabel(
-            "2024-10-04 发布 1.0.0 版本\n"
-            "新增 文档风险词汇批量检测功能\n"
-            "新增 新游爬虫功能\n"
-            "新增 版号匹配功能\n"
-            "新增 词表对照功能"
-        )
-        update_log_content.setAlignment(Qt.AlignLeft)
+        # 从 CHANGELOG.md 读取更新日志
+        update_log_content = QTextEdit()
+        update_log_content.setReadOnly(True)
         update_log_content.setStyleSheet("font-size: 14px; color: #555555;")
-        update_log_content.setWordWrap(True)
+        try:
+            with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+                update_log = f.read()
+                update_log_content.setPlainText(update_log)
+        except Exception as e:
+            update_log_content.setPlainText("无法读取更新日志。")
+
+        update_log_content.setFixedHeight(150)
 
         # 添加信息标签到主布局
         main_layout.addWidget(developer_label)
@@ -85,15 +99,146 @@ class SettingsInterface(BaseInterface):
         self.layout.addLayout(main_layout)
 
     def handle_check_update(self):
-        """处理检查版本更新的逻辑"""
-        # 延迟一秒后显示对话框
-        QTimer.singleShot(1000, self.show_update_dialog)
+        self.check_update_button.setEnabled(False)
+        self.output_text_edit.append("正在检查更新...")
 
-    def show_update_dialog(self):
-        """显示版本更新对话框"""
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("版本更新")
-        msg_box.setText("当前已是最新版本！")
-        msg_box.setIcon(QMessageBox.Information)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        msg_box.exec()
+        # 如果已有线程在运行，先停止
+        if self.update_thread and self.update_thread.isRunning():
+            self.update_thread.quit()
+            self.update_thread.wait()
+
+        self.update_thread = QThread()
+        self.version_checker = VersionChecker()
+        self.worker = VersionCheckWorker(self.version_checker)
+        self.worker.moveToThread(self.update_thread)
+
+        self.update_thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.on_update_check_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.update_thread.finished.connect(self.update_thread.deleteLater)
+
+        self.worker.progress.connect(self.report_progress)
+
+        self.update_thread.start()
+
+
+    def report_progress(self, message):
+        self.output_text_edit.append(message)
+
+    def on_update_check_finished(self, is_new_version, latest_version, download_url, release_notes):
+        """处理版本检测完成后的逻辑"""
+        if is_new_version:
+            msg = (
+                f"当前版本: {self.current_version}\n"
+                f"最新版本: {latest_version}\n\n"
+                f"更新内容:\n{release_notes}\n\n"
+                f"是否下载并更新到最新版本？"
+            )
+            reply = QMessageBox.question(
+                self,
+                "发现新版本",
+                msg,
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes and download_url:
+                # 开始下载
+
+                # 如果已有下载线程在运行，先停止
+                if self.download_thread and self.download_thread.isRunning():
+                    self.download_thread.quit()
+                    self.download_thread.wait()
+
+                self.output_text_edit.append("开始下载最新版本...")
+                self.download_thread = QThread()
+                self.download_worker = DownloadWorker(download_url)
+                self.download_worker.moveToThread(self.download_thread)
+
+                self.download_thread.started.connect(self.download_worker.run)
+                self.download_worker.progress.connect(self.report_progress)
+                self.download_worker.finished.connect(self.on_download_finished)
+                self.download_worker.finished.connect(self.download_worker.deleteLater)
+                self.download_thread.finished.connect(self.download_thread.deleteLater)
+
+                self.download_thread.start()
+            else:
+                self.output_text_edit.append("用户取消了更新。")
+                self.check_update_button.setEnabled(True)
+        elif latest_version:
+            self.output_text_edit.append("当前已是最新版本。")
+            self.check_update_button.setEnabled(True)
+        else:
+            self.output_text_edit.append("无法获取最新版本信息。")
+            self.check_update_button.setEnabled(True)
+
+    def on_download_finished(self, success, file_path):
+        if success:
+            self.output_text_edit.append(f"下载完成，文件已保存到 {file_path}")
+            reply = QMessageBox.question(
+                self,
+                "下载完成",
+                "下载完成，是否立即更新？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                # 开始更新
+                self.output_text_edit.append("正在更新...")
+                try:
+                    self.update_application(file_path)
+                except Exception as e:
+                    QMessageBox.critical(self, "更新失败", f"更新过程中发生错误：{str(e)}")
+            else:
+                self.output_text_edit.append("用户取消了更新。")
+        else:
+            self.output_text_edit.append("下载失败，请检查网络连接。")
+            QMessageBox.warning(self, "下载失败", "下载最新版本时出错，请稍后重试。")
+        self.check_update_button.setEnabled(True)
+
+    def update_application(self, zip_file_path):
+        import zipfile
+        import shutil
+        import sys
+        import os
+
+        # 解压缩到临时目录
+        temp_dir = os.path.join(os.getcwd(), "update_temp")
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir)
+
+        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+
+        # 复制文件，替换当前应用
+        try:
+            # 假设所有文件都在 temp_dir 下，复制到当前应用目录
+            app_dir = os.getcwd()
+            for item in os.listdir(temp_dir):
+                s = os.path.join(temp_dir, item)
+                d = os.path.join(app_dir, item)
+                if os.path.isdir(s):
+                    if os.path.exists(d):
+                        shutil.rmtree(d)
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+            self.output_text_edit.append("更新完成，正在重启应用...")
+            # 重启应用
+            self.restart_application()
+        except Exception as e:
+            raise Exception(f"更新失败：{str(e)}")
+        finally:
+            # 清理临时文件
+            shutil.rmtree(temp_dir)
+            os.remove(zip_file_path)
+
+    def restart_application(self):
+        import sys
+        import os
+        import subprocess
+        # 获取当前可执行文件路径
+        executable = sys.executable
+        args = sys.argv
+        # 重启应用
+        subprocess.Popen([executable] + args)
+        # 退出当前应用
+        QApplication.quit()

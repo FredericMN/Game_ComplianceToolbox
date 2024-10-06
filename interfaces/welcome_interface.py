@@ -1,4 +1,4 @@
-# project-01/interfaces/welcome_interface.py
+# interfaces/welcome_interface.py
 
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
 from PySide6.QtCore import Qt, QThread, Signal, QRectF, QPointF
@@ -14,8 +14,7 @@ class WelcomeInterface(BaseInterface):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 不在这里调用 run_environment_check
-        # self.init_environment_check()
+        self.init_ui()  # 添加这行，初始化 UI
 
     def init_ui(self):
         # 主垂直布局

@@ -8,11 +8,13 @@ from utils.crawler import match_version_numbers
 import traceback
 
 class VersionMatchingWorker(QObject):
+    """版号匹配界面"""
     finished = Signal()
     progress = Signal(str)
 
     def __init__(self, excel_file):
         super().__init__()
+        self.init_ui()
         self.excel_file = excel_file
 
     def run(self):
