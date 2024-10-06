@@ -70,15 +70,17 @@ jobs:
 
     - name: Verify executable exists
       run: |
-        if (-not (Test-Path "dist\ComplianceToolbox.exe")) {
+        if (-not (Test-Path "dist\ComplianceToolbox\ComplianceToolbox.exe")) {
             Write-Output "Executable not found!"
             exit 1
         }
 
     - name: Compress build output
       run: |
-        cd dist
-        Compress-Archive -Path "ComplianceToolbox.exe", "_internal" -DestinationPath "ComplianceToolbox.zip"
+        cd dist\ComplianceToolbox
+        Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox_temp.zip"
+        cd ..  # 返回 dist 目录
+        Move-Item -Path "ComplianceToolbox_temp.zip" -Destination "ComplianceToolbox.zip"
         dir
 
     - name: Upload build artifact
