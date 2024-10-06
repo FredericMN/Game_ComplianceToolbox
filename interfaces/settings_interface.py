@@ -198,6 +198,7 @@ class SettingsInterface(BaseInterface):
         import shutil
         import sys
         import os
+        import subprocess
 
         # 解压缩到临时目录
         temp_dir = os.path.join(os.getcwd(), "update_temp")
@@ -208,28 +209,30 @@ class SettingsInterface(BaseInterface):
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
 
-        # 复制文件，替换当前应用
+        # 创建更新脚本
         try:
             # 假设所有文件都在 temp_dir 下，复制到当前应用目录
             app_dir = os.getcwd()
-            for item in os.listdir(temp_dir):
-                s = os.path.join(temp_dir, item)
-                d = os.path.join(app_dir, item)
-                if os.path.isdir(s):
-                    if os.path.exists(d):
-                        shutil.rmtree(d)
-                    shutil.copytree(s, d)
-                else:
-                    shutil.copy2(s, d)
+            update_script = os.path.join(app_dir, 'update.bat')
+            with open(update_script, 'w', encoding='utf-8') as f:
+                f.write(f"""
+    @echo off
+    echo 正在更新，请稍候...
+    ping localhost -n 3 > nul
+    xcopy /E /Y "{temp_dir}\\*" "{app_dir}"
+    rd /S /Q "{temp_dir}"
+    del "{zip_file_path}"
+    del "%~f0"
+    start "" "{sys.executable}"
+                """)
             self.output_text_edit.append("更新完成，正在重启应用...")
-            # 重启应用
-            self.restart_application()
+            # 启动更新脚本
+            subprocess.Popen([update_script])
+            # 退出当前应用
+            QApplication.quit()
         except Exception as e:
             raise Exception(f"更新失败：{str(e)}")
-        finally:
-            # 清理临时文件
-            shutil.rmtree(temp_dir)
-            os.remove(zip_file_path)
+
 
     def restart_application(self):
         import sys

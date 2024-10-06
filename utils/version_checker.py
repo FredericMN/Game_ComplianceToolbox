@@ -35,7 +35,24 @@ class VersionChecker:
     def is_new_version_available(self):
         if not self.latest_version:
             self.check_latest_version()
-        return self.latest_version != self.current_version
+        return self.compare_versions(self.latest_version, self.current_version) > 0
+
+    def compare_versions(self, v1, v2):
+        def parse_version(v):
+            return [int(x) for x in v.split('.')]
+        v1_nums = parse_version(v1)
+        v2_nums = parse_version(v2)
+        # 补齐版本号长度，例如将 [1, 0] 补齐为 [1, 0, 0]
+        length = max(len(v1_nums), len(v2_nums))
+        v1_nums.extend([0] * (length - len(v1_nums)))
+        v2_nums.extend([0] * (length - len(v2_nums)))
+        # 比较每一部分
+        for a, b in zip(v1_nums, v2_nums):
+            if a > b:
+                return 1
+            elif a < b:
+                return -1
+        return 0
 
     def get_download_url(self):
         # 查找名为 "ComplianceToolbox.zip" 的资产
