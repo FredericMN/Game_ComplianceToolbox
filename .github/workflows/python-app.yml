@@ -75,6 +75,11 @@ jobs:
             exit 1
         }
 
+    - name: Compress build output
+      run: |
+        Compress-Archive -Path "dist\ComplianceToolbox\*" -DestinationPath "ComplianceToolbox.zip"
+        dir
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
@@ -98,7 +103,7 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/ComplianceToolbox/**
+        files: ComplianceToolbox.zip
         body_path: release_notes.txt
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
