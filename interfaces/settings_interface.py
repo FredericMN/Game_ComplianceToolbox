@@ -234,14 +234,14 @@ class SettingsInterface(BaseInterface):
             update_script = os.path.join(app_dir, 'update.bat')
             with open(update_script, 'w', encoding='utf-8') as f:
                 f.write(f"""
-    @echo off
-    echo 正在更新，请稍候...
-    ping localhost -n 3 > nul
-    xcopy /E /Y "{temp_dir}\\*" "{app_dir}"
-    rd /S /Q "{temp_dir}"
-    del "{zip_file_path}"
-    del "%~f0"
-    start "" "{sys.executable}"
+            @echo off
+            echo Updating, please wait...
+            ping localhost -n 3 > nul
+            xcopy /E /Y "{temp_dir}\\*" "{app_dir}"
+            rd /S /Q "{temp_dir}"
+            del "{zip_file_path}"
+            del "%~f0"
+            start "" "{sys.executable}"
                 """)
             self.output_text_edit.append("更新完成，正在重启应用...")
             # 启动更新脚本
