@@ -5,6 +5,8 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QPushButton, QFrame, QMessage
 from .base_interface import BaseInterface
 from utils.version import __version__
 from utils.version_checker import VersionChecker, VersionCheckWorker, DownloadWorker
+import os
+import sys
 
 class SettingsInterface(BaseInterface):
     """设定界面"""
@@ -14,6 +16,7 @@ class SettingsInterface(BaseInterface):
         self.update_thread = None  # 重命名线程变量
         self.download_thread = None  # 初始化下载线程变量
         self.init_ui()
+        self.load_local_update_logs()  # 加载本地更新日志
 
     def init_ui(self):
         # 创建主垂直布局
@@ -73,30 +76,46 @@ class SettingsInterface(BaseInterface):
         update_log_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333333;")
 
         # 创建更新日志内容
-        # 从 CHANGELOG.md 读取更新日志
-        update_log_content = QTextEdit()
-        update_log_content.setReadOnly(True)
-        update_log_content.setStyleSheet("font-size: 14px; color: #555555;")
-        try:
-            with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
-                update_log = f.read()
-                update_log_content.setPlainText(update_log)
-        except Exception as e:
-            update_log_content.setPlainText("无法读取更新日志。")
-
-        update_log_content.setFixedHeight(150)
+        self.update_log_text_edit = QTextEdit()
+        self.update_log_text_edit.setReadOnly(True)
+        self.update_log_text_edit.setStyleSheet("font-size: 14px; color: #555555;")
+        self.update_log_text_edit.setFixedHeight(150)
 
         # 添加信息标签到主布局
         main_layout.addWidget(developer_label)
         main_layout.addWidget(version_label)
         main_layout.addWidget(update_log_label)
-        main_layout.addWidget(update_log_content)
+        main_layout.addWidget(self.update_log_text_edit)
 
         # 添加Stretch以使内容居中
         main_layout.addStretch()
 
         # 将主布局添加到BaseInterface的布局中
         self.layout.addLayout(main_layout)
+
+    def load_local_update_logs(self):
+        try:
+            # 获取当前程序的目录
+            if getattr(sys, 'frozen', False):
+                # 如果是打包后的可执行文件
+                base_path = sys._MEIPASS
+                # 在打包后，CHANGELOG.md 位于 base_path 目录下
+                changelog_path = os.path.join(base_path, 'CHANGELOG.md')
+            else:
+                # 如果是直接运行的脚本
+                base_path = os.path.dirname(os.path.abspath(__file__))
+                # 假设 CHANGELOG.md 位于脚本文件所在目录的上一级目录
+                changelog_path = os.path.join(base_path, '..', 'CHANGELOG.md')
+
+            # 检查文件是否存在
+            if not os.path.exists(changelog_path):
+                raise FileNotFoundError(f"未找到文件 {changelog_path}")
+
+            with open(changelog_path, 'r', encoding='utf-8') as f:
+                changelog_content = f.read()
+                self.update_log_text_edit.setPlainText(changelog_content)
+        except Exception as e:
+            self.update_log_text_edit.setPlainText(f"无法读取更新日志：{str(e)}")
 
     def handle_check_update(self):
         self.check_update_button.setEnabled(False)
@@ -120,7 +139,6 @@ class SettingsInterface(BaseInterface):
         self.worker.progress.connect(self.report_progress)
 
         self.update_thread.start()
-
 
     def report_progress(self, message):
         self.output_text_edit.append(message)
@@ -232,7 +250,6 @@ class SettingsInterface(BaseInterface):
             QApplication.quit()
         except Exception as e:
             raise Exception(f"更新失败：{str(e)}")
-
 
     def restart_application(self):
         import sys
