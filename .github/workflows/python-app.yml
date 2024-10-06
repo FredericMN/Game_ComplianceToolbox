@@ -78,7 +78,7 @@ jobs:
     - name: Compress build output
       run: |
         cd dist\ComplianceToolbox
-        Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox.zip"
+        Compress-Archive -Path "." -DestinationPath "..\ComplianceToolbox.zip"
         cd ..  # 返回 dist 目录
         dir
 
