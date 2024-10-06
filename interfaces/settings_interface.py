@@ -60,16 +60,6 @@ class SettingsInterface(BaseInterface):
         # 添加分割线到主布局
         main_layout.addWidget(separator)
 
-        # 创建开发者信息标签
-        developer_label = QLabel("开发者：合规团队")
-        developer_label.setAlignment(Qt.AlignCenter)
-        developer_label.setStyleSheet("font-size: 14px; color: #555555;")
-
-        # 创建当前版本标签
-        version_label = QLabel(f"当前版本：{self.current_version}")
-        version_label.setAlignment(Qt.AlignCenter)
-        version_label.setStyleSheet("font-size: 14px; color: #555555;")
-
         # 创建更新日志标签
         update_log_label = QLabel("更新日志：")
         update_log_label.setAlignment(Qt.AlignLeft)
@@ -81,14 +71,29 @@ class SettingsInterface(BaseInterface):
         self.update_log_text_edit.setStyleSheet("font-size: 14px; color: #555555;")
         self.update_log_text_edit.setFixedHeight(150)
 
-        # 添加信息标签到主布局
-        main_layout.addWidget(developer_label)
-        main_layout.addWidget(version_label)
+        # 添加更新日志标签和内容到主布局
         main_layout.addWidget(update_log_label)
         main_layout.addWidget(self.update_log_text_edit)
 
-        # 添加Stretch以使内容居中
+        # 添加Stretch以使后续内容位于底部
         main_layout.addStretch()
+
+        # 创建开发者信息标签
+        developer_label = QLabel("开发者：合规团队")
+        developer_label.setAlignment(Qt.AlignCenter)
+        developer_label.setStyleSheet("font-size: 14px; color: #555555;")
+
+        # 创建当前版本标签
+        version_label = QLabel(f"当前版本：{self.current_version}")
+        version_label.setAlignment(Qt.AlignCenter)
+        version_label.setStyleSheet("font-size: 14px; color: #555555;")
+
+        # 创建更新日志标签
+        # (已移动到上方，不再需要在这里创建)
+
+        # 添加信息标签到主布局（移动到最下方）
+        main_layout.addWidget(developer_label)
+        main_layout.addWidget(version_label)
 
         # 将主布局添加到BaseInterface的布局中
         self.layout.addLayout(main_layout)
@@ -139,6 +144,8 @@ class SettingsInterface(BaseInterface):
         self.worker.progress.connect(self.report_progress)
 
         self.update_thread.start()
+
+        self.worker.finished.connect(lambda: self.check_update_button.setEnabled(True))
 
     def report_progress(self, message):
         self.output_text_edit.append(message)
@@ -227,21 +234,29 @@ class SettingsInterface(BaseInterface):
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
 
-        # 创建更新脚本
         try:
-            # 假设所有文件都在 temp_dir 下，复制到当前应用目录
             app_dir = os.getcwd()
             update_script = os.path.join(app_dir, 'update.bat')
+            executable_name = 'ComplianceToolbox.exe'
+            executable_path = os.path.join(app_dir, executable_name)
+            zip_file_name = os.path.basename(zip_file_path)
+
             with open(update_script, 'w', encoding='utf-8') as f:
                 f.write(f"""
-            @echo off
-            echo Updating, please wait...
-            ping localhost -n 3 > nul
-            xcopy /E /Y "{temp_dir}\\*" "{app_dir}" > nul
-            rd /S /Q "{temp_dir}"
-            del "{zip_file_path}"
-            del "%~f0"
-            start "" "{sys.executable}"
+@echo off
+echo Updating, please wait...
+:waitloop
+tasklist /FI "IMAGENAME eq {executable_name}" 2>NUL | find /I /N "{executable_name}">NUL
+if "%ERRORLEVEL%"=="0" (
+    echo Waiting for application to close...
+    timeout /t 2 > nul
+    goto waitloop
+)
+xcopy /E /Y "{temp_dir}\\*" "{app_dir}" > nul
+rd /S /Q "{temp_dir}"
+del "{zip_file_path}"
+del "%~f0"
+start "" "{executable_path}"
                 """)
             self.output_text_edit.append("更新完成，正在重启应用...")
             # 启动更新脚本

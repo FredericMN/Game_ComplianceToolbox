@@ -8,13 +8,13 @@ from utils.crawler import match_version_numbers
 import traceback
 
 class VersionMatchingWorker(QObject):
-    """版号匹配界面"""
+    """版号匹配工作线程"""
     finished = Signal()
     progress = Signal(str)
 
     def __init__(self, excel_file):
         super().__init__()
-        self.init_ui()
+        # self.init_ui()  # 确保已移除或注释掉此行
         self.excel_file = excel_file
 
     def run(self):
@@ -31,6 +31,10 @@ class VersionMatchingWorker(QObject):
 
 class VersionMatchingInterface(BaseInterface):
     """版号匹配界面"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()  # 调用初始化界面的方法
 
     def init_ui(self):
         self.layout.setAlignment(Qt.AlignTop)
