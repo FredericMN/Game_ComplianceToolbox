@@ -78,16 +78,16 @@ jobs:
     - name: Compress build output
       run: |
         cd dist\ComplianceToolbox
-        Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox_temp.zip"
+        Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox.zip"
         cd ..  # 返回 dist 目录
-        Move-Item -Path "ComplianceToolbox_temp.zip" -Destination "ComplianceToolbox.zip"
-        dir
+        Move-Item -Path "ComplianceToolbox.zip" -Destination "..\ComplianceToolbox.zip"
+        dir ..
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ComplianceToolbox
-        path: dist/ComplianceToolbox.zip
+        path: ComplianceToolbox.zip
 
     # 自动发布到 GitHub Releases
     - name: Read CHANGELOG
@@ -106,7 +106,7 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/ComplianceToolbox.zip
+        files: ComplianceToolbox.zip
         body_path: release_notes.txt
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
