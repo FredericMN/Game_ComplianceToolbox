@@ -51,44 +51,44 @@ jobs:
       run: |
         python -m pip show pyinstaller || python -m pip install pyinstaller
 
-        - name: Build executable with PyInstaller
-        run: |
-          pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
-            --add-data "resources;resources" --add-data "styles;styles" `
-            --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
-            --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
-            --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
-            --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
-            --hidden-import=docx --hidden-import=python-docx `
-            main.py
-    
-        - name: List build directory
-          run: |
-            dir dist
-    
-        - name: Verify executable exists
-          run: |
-            if (-not (Test-Path "dist\ComplianceToolbox\ComplianceToolbox.exe")) {
-                Write-Output "Executable not found!"
-                exit 1
-            }
-    
-        - name: Compress build output
-          run: |
-            # 进入 dist 目录，压缩 ComplianceToolbox 文件夹的内容
-            cd dist\ComplianceToolbox
-            Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox.zip"
-            cd ..  # 返回 dist 目录
-    
-        - name: Upload build artifact
-          uses: actions/upload-artifact@v3
-          with:
-            name: ComplianceToolbox
-            path: dist/ComplianceToolbox.zip
+    - name: Build executable with PyInstaller
+      run: |
+        pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
+          --add-data "resources;resources" --add-data "styles;styles" `
+          --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
+          --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
+          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
+          --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
+          --hidden-import=docx --hidden-import=python-docx `
+          main.py
+
+    - name: List build directory
+      run: |
+        dir dist
+
+    - name: Verify executable exists
+      run: |
+        if (-not (Test-Path "dist\ComplianceToolbox\ComplianceToolbox.exe")) {
+            Write-Output "Executable not found!"
+            exit 1
+        }
+
+    - name: Compress build output
+      run: |
+        cd dist\ComplianceToolbox
+        Compress-Archive -Path "*" -DestinationPath "..\ComplianceToolbox.zip"
+        cd ..  # 返回 dist 目录
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ComplianceToolbox
+        path: dist/ComplianceToolbox.zip
 
     # 自动发布到GitHub Releases
     - name: Read CHANGELOG
       id: changelog
+      shell: pwsh
       run: |
         $content = Get-Content 'CHANGELOG.md' -Raw
         $regex = "(?s)(?<=##\s${{ github.ref_name }}\s).+?(?=##)"
