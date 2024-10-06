@@ -75,16 +75,11 @@ jobs:
             exit 1
         }
 
-    - name: Compress build output
-      run: |
-        Compress-Archive -Path "dist\ComplianceToolbox\*" -DestinationPath "ComplianceToolbox.zip"
-        dir
-
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ComplianceToolbox
-        path: ComplianceToolbox.zip
+        path: dist/ComplianceToolbox
 
     # 自动发布到 GitHub Releases
     - name: Read CHANGELOG
@@ -101,11 +96,23 @@ jobs:
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ComplianceToolbox.zip
-        body_path: release_notes.txt
-        tag_name: ${{ github.ref_name }}
-        name: Release ${{ github.ref_name }}
+      id: create_release
+      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: dist/ComplianceToolbox/ComplianceToolbox.exe
+        asset_name: ComplianceToolbox.exe
+        asset_content_type: application/octet-stream
