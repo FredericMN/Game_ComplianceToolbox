@@ -237,7 +237,7 @@ class SettingsInterface(BaseInterface):
             @echo off
             echo Updating, please wait...
             ping localhost -n 3 > nul
-            xcopy /E /Y "{temp_dir}\\*" "{app_dir}"
+            xcopy /E /Y "{temp_dir}\\*" "{app_dir}" > nul
             rd /S /Q "{temp_dir}"
             del "{zip_file_path}"
             del "%~f0"
