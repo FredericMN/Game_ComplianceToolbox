@@ -243,20 +243,20 @@ class SettingsInterface(BaseInterface):
 
             with open(update_script, 'w', encoding='utf-8') as f:
                 f.write(f"""
-@echo off
-echo Updating, please wait...
-:waitloop
-tasklist /FI "IMAGENAME eq {executable_name}" 2>NUL | find /I /N "{executable_name}">NUL
-if "%ERRORLEVEL%"=="0" (
-    echo Waiting for application to close...
-    timeout /t 2 > nul
-    goto waitloop
-)
-xcopy /E /Y "{temp_dir}\\*" "{app_dir}" > nul
-rd /S /Q "{temp_dir}"
-del "{zip_file_path}"
-del "%~f0"
-start "" "{executable_path}"
+    @echo off
+    echo Updating, please wait...
+    :waitloop
+    tasklist /FI "IMAGENAME eq {executable_name}" 2>NUL | find /I /N "{executable_name}">NUL
+    if "%ERRORLEVEL%"=="0" (
+        echo Waiting for application to close...
+        timeout /t 2 > nul
+        goto waitloop
+    )
+    xcopy /E /Y "%~dp0update_temp\\*" "%~dp0" > nul
+    rd /S /Q "%~dp0update_temp"
+    del "%~dp0{zip_file_name}"
+    start "" "%~dp0{executable_name}"
+    del "%~f0"
                 """)
             self.output_text_edit.append("更新完成，正在重启应用...")
             # 启动更新脚本
@@ -265,6 +265,7 @@ start "" "{executable_path}"
             QApplication.quit()
         except Exception as e:
             raise Exception(f"更新失败：{str(e)}")
+
 
     def restart_application(self):
         import sys
