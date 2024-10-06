@@ -77,18 +77,10 @@ jobs:
 
     - name: Compress build output
       run: |
-        cd dist\ComplianceToolbox
-        Compress-Archive -Path * -DestinationPath ..\..\ComplianceToolbox.zip -Force
-        cd ..\..
+        Compress-Archive -Path 'dist\ComplianceToolbox\*' -DestinationPath 'ComplianceToolbox.zip' -Force
         dir
 
-    - name: Upload build artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ComplianceToolbox
-        path: ComplianceToolbox.zip
-
-    # 自动发布到 GitHub Releases
+    # 自动发布到GitHub Releases
     - name: Read CHANGELOG
       id: changelog
       shell: pwsh
@@ -103,11 +95,10 @@ jobs:
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
+      uses: ncipollo/release-action@v1
       with:
-        files: ComplianceToolbox.zip
-        body_path: release_notes.txt
-        tag_name: ${{ github.ref_name }}
+        tag: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        bodyFile: release_notes.txt
+        artifacts: ComplianceToolbox.zip
+        token: ${{ secrets.GITHUB_TOKEN }}
