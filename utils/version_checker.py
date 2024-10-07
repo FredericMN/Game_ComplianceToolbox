@@ -82,7 +82,7 @@ class VersionCheckWorker(QObject):
                 self.progress.emit(f"发现新版本：{self.version_checker.latest_version}")
                 self.finished.emit(True, self.version_checker.latest_version, download_url, self.version_checker.release_notes)
             else:
-                self.progress.emit("当前已是最新版本。")
+                # self.progress.emit("当前已是最新版本。")
                 self.finished.emit(False, self.version_checker.latest_version, None, None)
         except Exception as e:
             self.progress.emit(f"检查更新失败: {str(e)}")
