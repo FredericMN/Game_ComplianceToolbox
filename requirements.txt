@@ -10,3 +10,6 @@ pandas
 xlrd
 requests
 pyinstaller
+transformers
+torch
+huggingface_hub

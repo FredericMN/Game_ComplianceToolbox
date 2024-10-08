@@ -15,6 +15,7 @@ from interfaces.settings_interface import SettingsInterface
 from interfaces.version_matching_interface import VersionMatchingInterface
 from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface
 from utils.version_checker import VersionChecker, VersionCheckWorker
+from interfaces.large_model_interface import LargeModelInterface
 from PySide6.QtCore import QThread
 
 def resource_path(relative_path):
@@ -46,6 +47,7 @@ class MainWindow(FramelessWindow):
         self.developingInterface = EmptyInterface(parent=self)  # 修改此行
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
+        self.largeModelInterface = LargeModelInterface(self)
 
         # 初始化布局和导航栏
         self.init_layout()
@@ -87,6 +89,10 @@ class MainWindow(FramelessWindow):
 
         self.add_sub_interface(
             self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"
+        )
+
+        self.add_sub_interface(
+            self.largeModelInterface, FIF.PROJECTOR, "大模型语义分析"
         )
 
         self.add_sub_interface(

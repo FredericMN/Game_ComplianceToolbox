@@ -48,6 +48,7 @@ class WelcomeInterface(BaseInterface):
             {"name": "新游爬虫", "description": "爬取TapTap上的新游信息并匹配版号。"},
             {"name": "版号匹配", "description": "匹配游戏的版号信息。"},
             {"name": "词表对照", "description": "对照两个词表的差异。"},
+            {"name": "大模型语意分析", "description": "通过大模型判断文本内容态度。"},
             {"name": "设定", "description": "配置工具的相关设置。"}
         ]
 
