@@ -95,6 +95,13 @@ class WelcomeInterface(BaseInterface):
         # 检测并配置运行环境按钮和说明
         env_layout = QHBoxLayout()
         self.check_env_button = QPushButton("检测并配置运行环境")
+        self.check_env_button.setFixedHeight(40)  # 增加按钮高度
+        self.check_env_button.setFixedWidth(200)   # 设置按钮宽度，不横跨整个界面
+        # 设置按钮字体为加粗
+        font = QFont()
+        font.setBold(True)
+        self.check_env_button.setFont(font)
+
         self.check_env_button.clicked.connect(self.run_environment_check)
         description_label = QLabel("每次运行软件时会自动检测运行环境,需安装微软Edge浏览器。")
         description_label.setWordWrap(True)
