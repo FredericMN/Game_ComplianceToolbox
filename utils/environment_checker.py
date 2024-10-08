@@ -1,10 +1,8 @@
-# project-01/utils/environment_checker.py
-
 import shutil
 import subprocess
 import sys
 import os
-from PySide6.QtCore import QObject, Signal, QTimer, QEventLoop
+from PySide6.QtCore import QObject, Signal
 import requests
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from selenium import webdriver
@@ -12,8 +10,7 @@ from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.edge.service import Service as EdgeService
 import winreg
-import ctypes
-import ctypes.wintypes
+import concurrent.futures
 
 class EnvironmentChecker(QObject):
     output_signal = Signal(str)
@@ -37,12 +34,6 @@ class EnvironmentChecker(QObject):
 
     def step1_check_network(self):
         self.output_signal.emit("01-检测网络连接...")
-        loop = QEventLoop()
-        timer = QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(loop.quit)
-        timer.start(5000)  # 设置5秒超时
-
         try:
             response = requests.get("https://cn.bing.com/", timeout=3)
             if response.status_code == 200:
@@ -53,17 +44,9 @@ class EnvironmentChecker(QObject):
         except requests.RequestException:
             self.output_signal.emit("01-检测网络连接-网络异常，请检查网络连接。")
             self.has_errors = True
-        finally:
-            loop.quit()
 
     def step2_check_edge_browser(self):
         self.output_signal.emit("02-检测Edge浏览器安装情况...")
-        loop = QEventLoop()
-        timer = QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(loop.quit)
-        timer.start(5000)  # 设置5秒超时
-
         try:
             edge_path = self.find_edge_executable()
             if edge_path:
@@ -84,8 +67,9 @@ class EnvironmentChecker(QObject):
                 self.output_signal.emit("02-检测Edge浏览器安装情况-下载链接: https://www.microsoft.com/edge")
                 self.has_errors = True
                 self.output_signal.emit("03-Edge浏览器WebDriver配置情况-需Edge浏览器安装后检测。")
-        finally:
-            loop.quit()
+        except Exception as e:
+            self.output_signal.emit(f"02-检测Edge浏览器安装情况-出现异常: {e}")
+            self.has_errors = True
 
     def step3_check_edge_driver(self):
         if not self.edge_version:
@@ -94,11 +78,6 @@ class EnvironmentChecker(QObject):
             return
 
         self.output_signal.emit("03-Edge浏览器WebDriver配置情况-检测Edge WebDriver...")
-        loop = QEventLoop()
-        timer = QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(loop.quit)
-        timer.start(10000)  # 设置10秒超时
 
         driver = None  # 初始化 driver
         try:
@@ -106,8 +85,12 @@ class EnvironmentChecker(QObject):
             options.use_chromium = True
             options.add_argument("--headless")
             # 尝试实例化webdriver.Edge以检查WebDriver是否正确配置
-            driver = webdriver.Edge(options=options)
-            self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver已正确配置。")
+            driver = self.create_edge_driver_with_timeout(options, timeout=10)
+            if driver:
+                self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver已正确配置。")
+            else:
+                self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver启动超时。")
+                self.has_errors = True
         except WebDriverException as e:
             self.output_signal.emit("03-Edge浏览器WebDriver配置情况-未正确配置Edge WebDriver。尝试下载并配置WebDriver...")
             try:
@@ -116,8 +99,12 @@ class EnvironmentChecker(QObject):
                 # 设置Edge WebDriver服务
                 service = EdgeService(driver_path)
                 # 测试下载的WebDriver
-                driver = webdriver.Edge(service=service, options=options)
-                self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver已成功配置。")
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+                if driver:
+                    self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver已成功配置。")
+                else:
+                    self.output_signal.emit("03-Edge浏览器WebDriver配置情况-Edge WebDriver启动超时。")
+                    self.has_errors = True
             except Exception as download_e:
                 self.output_signal.emit(f"03-Edge浏览器WebDriver配置情况-Edge WebDriver下载失败: {str(download_e)}")
                 self.output_signal.emit("03-Edge浏览器WebDriver配置情况-请手动下载并配置WebDriver。下载链接: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
@@ -128,7 +115,27 @@ class EnvironmentChecker(QObject):
                     driver.quit()
                 except Exception as quit_e:
                     self.output_signal.emit(f"03-Edge浏览器WebDriver配置情况-无法正常关闭WebDriver: {quit_e}")
-            loop.quit()
+
+    def create_edge_driver_with_timeout(self, options, service=None, timeout=10):
+        def create_driver():
+            if service:
+                return webdriver.Edge(service=service, options=options)
+            else:
+                return webdriver.Edge(options=options)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(create_driver)
+            try:
+                driver = future.result(timeout=timeout)
+                return driver
+            except concurrent.futures.TimeoutError:
+                self.output_signal.emit("03-Edge浏览器WebDriver配置情况-启动Edge WebDriver超时。")
+                self.has_errors = True
+                return None
+            except Exception as e:
+                self.output_signal.emit(f"03-Edge浏览器WebDriver配置情况-启动Edge WebDriver时发生异常: {e}")
+                self.has_errors = True
+                return None
 
     def find_edge_executable(self):
         """尝试找到Edge浏览器的可执行文件路径"""

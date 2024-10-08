@@ -1,9 +1,7 @@
-# interfaces/welcome_interface.py
-
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
-from PySide6.QtCore import Qt, QThread, Signal, QRectF, QPointF
+from PySide6.QtCore import Qt, QThread, Signal, QSize
 from .base_interface import BaseInterface
-from PySide6.QtGui import QFont, QColor, QPainter, QPixmap
+from PySide6.QtGui import QFont
 from utils.environment_checker import EnvironmentChecker
 
 class WelcomeInterface(BaseInterface):
