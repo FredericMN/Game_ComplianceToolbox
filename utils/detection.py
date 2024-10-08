@@ -43,7 +43,7 @@ def initialize_words():
     ])
     inducing_words = load_words(INDUCING_WORDS_PATH, [
         '吸粉', '毒', '吸烟', '抽烟', '酒', '烟草', '犯罪', '妈的', '诱导', '诈骗', '盗取',
-        '赌博', '色情', '偷取', '赌博', '毒品', '违法', '非法', '诱骗', '欺诈', '煽动'
+        '赌博', '色情', '偷取', '毒品', '违法', '非法', '诱骗', '欺诈', '煽动'
     ])
     return violent_words, inducing_words
 
