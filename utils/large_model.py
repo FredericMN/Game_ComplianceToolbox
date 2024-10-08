@@ -94,6 +94,8 @@ def analyze_file_with_model(file_path, progress_callback, device='cpu'):
     # 加载模型
     progress_callback("加载模型中...")
     try:
+        import torch  # 在函数内部导入
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
         model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         model = AutoModelForSequenceClassification.from_pretrained(model_dir)
@@ -152,6 +154,7 @@ def analyze_file_with_model(file_path, progress_callback, device='cpu'):
         new_file_path = file_path.replace('.docx', '_analyzed.docx')
         doc.save(new_file_path)
     elif file_type == 'xlsx':
+        import torch  # 确保在函数内部导入
         wb = load_workbook(file_path)
         for sheet in wb.worksheets:
             total_rows = sheet.max_row
