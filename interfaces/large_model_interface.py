@@ -1,8 +1,6 @@
-# interfaces/large_model_interface.py
-
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtWidgets import (
-    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy
+    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy, QComboBox, QHBoxLayout
 )
 from .base_interface import BaseInterface
 from qfluentwidgets import PrimaryPushButton
@@ -10,6 +8,7 @@ from utils.large_model import (
     check_and_download_model, analyze_file_with_model, check_model_configured
 )
 from PySide6.QtGui import QTextCursor  # 导入 QTextCursor 类
+import torch  # 导入torch库
 
 class DownloadModelWorker(QObject):
     """
@@ -19,8 +18,9 @@ class DownloadModelWorker(QObject):
     progress_percent = Signal(int)
     finished = Signal(bool)
 
-    def __init__(self):
+    def __init__(self, device='cpu'):
         super().__init__()
+        self.device = device  # 添加设备属性
 
     def run(self):
         try:
@@ -45,6 +45,7 @@ class DownloadModelWorker(QObject):
             except:
                 pass  # 无法解析百分比则忽略
 
+
 class AnalyzeFileWorker(QObject):
     """
     工作线程，用于分析文件。
@@ -53,15 +54,16 @@ class AnalyzeFileWorker(QObject):
     progress_percent = Signal(int)
     finished = Signal(bool, dict)  # success, result_dict
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, device='cpu'):
         super().__init__()
         self.file_path = file_path
+        self.device = device  # 添加设备属性
 
     def run(self):
         try:
             # 使用大模型分析文件，传递 progress.emit 作为回调
             result = analyze_file_with_model(
-                self.file_path, self.emit_progress)
+                self.file_path, self.emit_progress, self.device)
             self.finished.emit(True, result)
         except Exception as e:
             self.progress.emit(f"发生错误: {str(e)}")
@@ -81,17 +83,38 @@ class AnalyzeFileWorker(QObject):
             except:
                 pass  # 无法解析百分比则忽略
 
+
 class LargeModelInterface(BaseInterface):
     """大模型语义分析界面"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.device = 'cpu'  # 默认设备为CPU
         self.init_ui()
 
+    # 在 init_ui 方法中更新说明标签
     def init_ui(self):
         self.layout.setAlignment(Qt.AlignTop)
 
+        # 设备选择布局
+        device_layout = QHBoxLayout()
+        device_label = QLabel("选择设备:")
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("CPU")
+        if torch.cuda.is_available():
+            self.device_combo.addItem("GPU")
+        else:
+            self.device_combo.addItem("GPU (不可用)")
+            self.device_combo.setItemData(1, "GPU不可用", Qt.ToolTipRole)
+            self.device_combo.setEnabled(False)  # 如果GPU不可用，禁用选择
+
+        self.device_combo.currentIndexChanged.connect(self.handle_device_change)
+        device_layout.addWidget(device_label)
+        device_layout.addWidget(self.device_combo)
+
         # 上部区域：下载和配置大模型
         top_layout = QVBoxLayout()
+        top_layout.addLayout(device_layout)  # 添加设备选择到上部布局
+
         self.configure_button = PrimaryPushButton("检测并配置大模型环境")
         self.configure_button.clicked.connect(self.handle_configure)
 
@@ -103,13 +126,11 @@ class LargeModelInterface(BaseInterface):
         self.progress_text_edit = QTextEdit()
         self.progress_text_edit.setReadOnly(True)
         self.progress_text_edit.setPlaceholderText("下载大模型进度信息输出区域")
-        # 移除高度限制，允许自动扩展
         self.progress_text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         top_layout.addWidget(self.configure_button)
         top_layout.addWidget(self.download_progress_bar)
         top_layout.addWidget(self.progress_text_edit)
-        top_layout.setStretch(0, 1)
         top_layout.setStretch(1, 1)
         top_layout.setStretch(2, 2)
 
@@ -126,7 +147,6 @@ class LargeModelInterface(BaseInterface):
         self.analysis_progress_text_edit = QTextEdit()
         self.analysis_progress_text_edit.setReadOnly(True)
         self.analysis_progress_text_edit.setPlaceholderText("大模型分析文档的进度展示")
-        # 移除高度限制，允许自动扩展
         self.analysis_progress_text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         bottom_layout.addWidget(self.analyze_button)
@@ -138,17 +158,35 @@ class LargeModelInterface(BaseInterface):
 
         # 添加说明标签
         explanation_label = QLabel(
-            "说明：仅支持Word文档与Excel表格进行分析，其中【消极内容】标记为黄色。"
+            "说明：仅支持Word文档与Excel表格进行分析。\n"
+            "分类标签及颜色标记如下：\n"
+            "• 正常（无标记）\n"
+            "• 低俗（绿色）\n"
+            "• 色情（黄色）\n"
+            "• 其他风险（红色）\n"
+            "• 成人（蓝色）"
         )
 
         # 将两个布局添加到主布局
         self.layout.addLayout(top_layout)
         self.layout.addLayout(bottom_layout)
         self.layout.addWidget(explanation_label)
-        # 设置主布局的伸缩因子，确保下部布局占据更多空间
         self.layout.setStretch(0, 1)
         self.layout.setStretch(1, 4)
         self.layout.setStretch(2, 0)
+
+    def handle_device_change(self, index):
+        selected = self.device_combo.currentText()
+        if selected == "CPU":
+            self.device = 'cpu'
+        elif selected == "GPU":
+            if torch.cuda.is_available():
+                self.device = 'cuda'
+                QMessageBox.information(self, "提示", "恭喜，你可以使用GPU进行加速运算。")
+            else:
+                self.device = 'cpu'
+                QMessageBox.warning(self, "提示", "抱歉，当前环境无法使用GPU进行运算。")
+                self.device_combo.setCurrentText("CPU")  # 重置为CPU
 
     def handle_configure(self):
         """
@@ -167,7 +205,7 @@ class LargeModelInterface(BaseInterface):
 
         # 启动下载线程
         self.thread = QThread()
-        self.worker = DownloadModelWorker()
+        self.worker = DownloadModelWorker(device=self.device)  # 传递设备信息
         self.worker.moveToThread(self.thread)
 
         # 连接信号
@@ -175,6 +213,9 @@ class LargeModelInterface(BaseInterface):
         self.worker.progress.connect(self.report_progress)
         self.worker.progress_percent.connect(self.download_progress_bar.setValue)
         self.worker.finished.connect(self.on_configure_finished)
+        
+        # 关键修复：确保线程在工作完成后正确退出
+        self.worker.finished.connect(self.thread.quit)  # 添加这一行
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
 
@@ -226,7 +267,7 @@ class LargeModelInterface(BaseInterface):
                 self.analysis_progress_bar.setValue(0)
 
                 self.analysis_thread = QThread()
-                self.analysis_worker = AnalyzeFileWorker(file_path)
+                self.analysis_worker = AnalyzeFileWorker(file_path, device=self.device)  # 传递设备信息
                 self.analysis_worker.moveToThread(self.analysis_thread)
 
                 # 连接信号
@@ -234,6 +275,9 @@ class LargeModelInterface(BaseInterface):
                 self.analysis_worker.progress.connect(self.report_analysis_progress)
                 self.analysis_worker.progress_percent.connect(self.analysis_progress_bar.setValue)
                 self.analysis_worker.finished.connect(self.on_analysis_finished)
+                
+                # 关键修复：确保线程在工作完成后正确退出
+                self.analysis_worker.finished.connect(self.analysis_thread.quit)  # 添加这一行
                 self.analysis_worker.finished.connect(self.analysis_worker.deleteLater)
                 self.analysis_thread.finished.connect(self.analysis_thread.deleteLater)
 
@@ -258,10 +302,12 @@ class LargeModelInterface(BaseInterface):
         if success:
             output_text = (
                 f"识别完毕，文字总字数为 {result['total_word_count']}。\n"
-                f"情感分析结果：\n"
-                f"积极内容 {result['positive_count']} 段，"
-                f"中性内容 {result['neutral_count']} 段，"
-                f"消极内容 {result['negative_count']} 段。其中消极内容已进行颜色标记。\n"
+                f"分析结果：\n"
+                f"正常内容 {result['normal_count']} 段，"
+                f"低俗内容 {result['low_vulgar_count']} 段，"
+                f"色情内容 {result['porn_count']} 段，"
+                f"其他风险内容 {result['other_risk_count']} 段，"
+                f"成人内容 {result['adult_count']} 段。其中低俗、色情、其他风险、成人内容已进行颜色标记。\n"
                 f"已保存标记后的副本：{result['new_file_path']}"
             )
             self.analysis_progress_text_edit.append(output_text)
