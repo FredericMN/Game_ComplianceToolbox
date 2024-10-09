@@ -8,3 +8,4 @@ from .settings_interface import SettingsInterface
 from .version_matching_interface import VersionMatchingInterface
 from .welcome_interface import WelcomeInterface
 from .vocabulary_comparison_interface import VocabularyComparisonInterface 
+from .environment_config_interface import EnvironmentConfigInterface  # 新增行

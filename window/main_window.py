@@ -1,4 +1,4 @@
-# main_window.py
+# window/main_window.py
 
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QStackedWidget, QMessageBox
 from PySide6.QtGui import QIcon
@@ -6,18 +6,26 @@ from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, FluentIcon as FIF
 )
 from qframelesswindow import FramelessWindow, StandardTitleBar
-from PySide6.QtGui import QIcon
 import os
 import sys
+
+# 将本地库路径添加到 sys.path 以确保本地安装的库被优先导入
+local_libs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'local_libs')
+if os.path.exists(local_libs_path):
+    sys.path.insert(0, local_libs_path)
+
+import torch  # 导入torch库
+
 from interfaces.welcome_interface import WelcomeInterface
 from interfaces.detection_tool_interface import DetectionToolInterface
 from interfaces.crawler_interface import CrawlerInterface
+from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface
+from interfaces.environment_config_interface import EnvironmentConfigInterface  # 导入新界面
 from interfaces.empty_interface import EmptyInterface
 from interfaces.settings_interface import SettingsInterface
 from interfaces.version_matching_interface import VersionMatchingInterface
-from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface
-from utils.version_checker import VersionChecker, VersionCheckWorker
 from interfaces.large_model_interface import LargeModelInterface
+from utils.version_checker import VersionChecker, VersionCheckWorker
 from PySide6.QtCore import QThread
 
 def resource_path(relative_path):
@@ -46,6 +54,7 @@ class MainWindow(FramelessWindow):
         self.detectionToolInterface = DetectionToolInterface(self)
         self.crawlerInterface = CrawlerInterface(self)
         self.vocabularyComparisonInterface = VocabularyComparisonInterface(self)  # 实例化新的界面
+        self.environmentConfigInterface = EnvironmentConfigInterface(self)  # 实例化新界面
         self.developingInterface = EmptyInterface(parent=self)  # 修改此行
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
@@ -95,6 +104,10 @@ class MainWindow(FramelessWindow):
 
         self.add_sub_interface(
             self.largeModelInterface, FIF.PROJECTOR, "大模型语义分析"
+        )
+
+        self.add_sub_interface(
+            self.environmentConfigInterface, FIF.BUS, "GPU加速环境配置"  # 添加新导航项
         )
 
         self.add_sub_interface(
