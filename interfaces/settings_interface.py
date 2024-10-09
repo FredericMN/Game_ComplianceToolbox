@@ -67,6 +67,7 @@ class SettingsInterface(BaseInterface):
         self.current_version = __version__
         self.update_thread = None  # 更新检查线程
         self.download_thread = None  # 下载线程
+        self.selected_version = None  # 'cpu' 或 'gpu'
         self.init_ui()
         self.load_local_update_logs()  # 加载本地更新日志
 
@@ -258,9 +259,11 @@ class SettingsInterface(BaseInterface):
             dialog.setWindowTitle("发现新版本")
             dialog.exec()
 
-            if dialog.selected_version == 'cpu' and cpu_download_url:
+            self.selected_version = dialog.selected_version  # 存储用户选择的版本
+
+            if self.selected_version == 'cpu' and cpu_download_url:
                 self.start_download(cpu_download_url)
-            elif dialog.selected_version == 'gpu' and gpu_download_url:
+            elif self.selected_version == 'gpu' and gpu_download_url:
                 self.start_download(gpu_download_url)
             else:
                 self.output_text_edit.append("用户取消了更新。")
@@ -316,6 +319,19 @@ class SettingsInterface(BaseInterface):
         import shutil
         import subprocess
 
+        # 确保用户已选择版本
+        if self.selected_version not in ['cpu', 'gpu']:
+            raise Exception("未选择更新版本。")
+
+        # 确定新的可执行文件名
+        if self.selected_version == 'cpu':
+            new_executable_name = "ComplianceToolbox_standard.exe"
+        else:
+            new_executable_name = "ComplianceToolbox_cuda.exe"
+
+        # 获取当前可执行文件名
+        current_executable_name = os.path.basename(sys.argv[0])
+
         # 创建临时目录
         temp_dir = os.path.join(os.getcwd(), "update_temp")
         if os.path.exists(temp_dir):
@@ -340,15 +356,16 @@ class SettingsInterface(BaseInterface):
         try:
             app_dir = os.getcwd()
             update_script = os.path.join(app_dir, 'update.bat')
-            executable_name = os.path.basename(sys.argv[0])
-            zip_file_name = os.path.basename(downloaded_file_path)
 
             with open(update_script, 'w', encoding='utf-8') as f:
                 f.write(f"""
 @echo off
 echo Updating, please wait...
+rd /S /Q "{app_dir}\\_internal"
+del /F /Q "{app_dir}\\ComplianceToolbox_standard.exe"
+del /F /Q "{app_dir}\\ComplianceToolbox_cuda.exe"
 :waitloop
-tasklist /FI "IMAGENAME eq {executable_name}" 2>NUL | find /I /N "{executable_name}">NUL
+tasklist /FI "IMAGENAME eq {current_executable_name}" 2>NUL | find /I /N "{current_executable_name}">NUL
 if "%ERRORLEVEL%"=="0" (
     echo Waiting for application to close...
     timeout /t 2 > nul
@@ -356,8 +373,8 @@ if "%ERRORLEVEL%"=="0" (
 )
 xcopy /E /Y "{temp_dir}\\*" "{app_dir}\\" > nul
 rd /S /Q "{temp_dir}"
-del "{app_dir}\\{zip_file_name}"
-start "" "{app_dir}\\{executable_name}"
+del /F /Q "{downloaded_file_path}"
+start "" "{app_dir}\\{new_executable_name}"
 del "%~f0"
                 """)
             self.output_text_edit.append("更新完成，正在重启应用...")
