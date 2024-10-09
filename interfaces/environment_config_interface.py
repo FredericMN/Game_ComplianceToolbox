@@ -1,17 +1,19 @@
 # interfaces/environment_config_interface.py
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QTextEdit
+    QWidget, QVBoxLayout, QLabel, QPushButton, QTextEdit, QProgressBar, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 import sys
 import os
 import subprocess
 import shutil
+import re
 
 class EnvironmentConfigWorker(QObject):
     progress = Signal(str)
-    finished = Signal(bool)  # success flag
+    download_progress = Signal(int)  # 信号用于进度条
+    finished = Signal(bool)  # 成功标志
 
     def __init__(self, target_dir):
         super().__init__()
@@ -61,10 +63,7 @@ class EnvironmentConfigWorker(QObject):
             else:
                 self.progress.emit(f"本地库目录已存在: {self.target_dir}")
 
-            # 使用 pip 的内部 API 安装包
-            import pip
-            from pip._internal.cli.main import main as pip_main
-
+            # 定义需要安装的包
             install_commands = [
                 "torch==2.4.1+cu121",
                 "torchvision==0.19.1+cu121",
@@ -73,8 +72,8 @@ class EnvironmentConfigWorker(QObject):
 
             self.progress.emit(f"正在安装 {' '.join(install_commands)} 到 {self.target_dir}...")
 
-            # 安装命令参数
-            args = [
+            # 构建 pip 安装参数
+            pip_args = [
                 "install",
                 "--no-cache-dir",
                 "--upgrade",
@@ -82,17 +81,61 @@ class EnvironmentConfigWorker(QObject):
                 "--target", self.target_dir
             ] + install_commands
 
-            self.progress.emit(f"pip install 参数: {' '.join(args)}")
+            self.progress.emit(f"pip install 参数: {' '.join(pip_args)}")
 
-            # 调用 pip 安装
-            result = pip_main(args)
+            # 使用 subprocess 调用 pip，并实时捕获输出
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "pip"] + pip_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1  # 实时输出
+                )
 
-            if result != 0:
-                self.progress.emit(f"安装过程中出现错误，退出码 {result}。")
+                # 正则表达式匹配下载进度
+                # 示例输出: Downloading https://... (2444.8 MB)
+                #                Downloading https://... (1.5/2.4 GB) 12.1 MB/s eta 0:01:17
+                progress_pattern = re.compile(r"(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)\s+([KM]B)")
+
+                for line in process.stdout:
+                    line = line.strip()
+                    if line:
+                        self.progress.emit(line)
+
+                        # 解析下载进度
+                        match = progress_pattern.search(line)
+                        if match:
+                            downloaded = float(match.group(1))
+                            total = float(match.group(2))
+                            unit = match.group(3)
+                            if unit == "KB":
+                                downloaded /= 1024
+                                total /= 1024
+                            elif unit == "MB":
+                                pass
+                            elif unit == "GB":
+                                downloaded *= 1024
+                                total *= 1024
+                            progress_percent = int((downloaded / total) * 100)
+                            progress_percent = min(max(progress_percent, 0), 100)  # 保证百分比在0-100之间
+                            self.download_progress.emit(progress_percent)
+
+                process.wait()
+                if process.returncode != 0:
+                    self.progress.emit(f"安装过程中出现错误，退出码 {process.returncode}。")
+                    self.finished.emit(False)
+                    return
+                else:
+                    self.progress.emit("安装完成。")
+            except subprocess.CalledProcessError as e:
+                self.progress.emit(f"pip 安装过程中发生异常: {str(e)}")
                 self.finished.emit(False)
                 return
-            else:
-                self.progress.emit("安装完成。")
+            except Exception as e:
+                self.progress.emit(f"发生异常: {str(e)}")
+                self.finished.emit(False)
+                return
 
             self.progress.emit("CUDA 环境配置成功。")
             self.finished.emit(True)
@@ -113,7 +156,7 @@ class EnvironmentConfigInterface(QWidget):
 
         # 说明标签
         explanation_text = (
-            "说明：如运行该软件的电脑硬件配置包含英伟达独立显卡，可尝试进行cuda环境配置，"
+            "说明：如运行该软件的电脑硬件配置包含英伟达独立显卡，可尝试进行CUDA环境配置，"
             "配置后可使用GPU加速大模型运算。"
         )
         self.explanation_label = QLabel(explanation_text)
@@ -131,10 +174,18 @@ class EnvironmentConfigInterface(QWidget):
         self.output_text_edit.setPlaceholderText("结果输出区域")
         self.layout.addWidget(self.output_text_edit)
 
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)  # 初始隐藏
+        self.layout.addWidget(self.progress_bar)
+
     def handle_detect_and_configure(self):
         self.detect_button.setEnabled(False)
         self.output_text_edit.clear()
         self.output_text_edit.append("开始检测并配置环境...")
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
 
         # 定义本地安装目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -148,6 +199,7 @@ class EnvironmentConfigInterface(QWidget):
 
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.update_output)
+        self.worker.download_progress.connect(self.update_progress_bar)  # 连接进度条信号
         self.worker.finished.connect(self.on_finished)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
@@ -156,12 +208,24 @@ class EnvironmentConfigInterface(QWidget):
 
     def update_output(self, message):
         self.output_text_edit.append(message)
+        # 根据消息内容判断是否有错误，并提示用户
+        if "Read timed out" in message or "Connection aborted" in message or "Failed to establish a new connection" in message:
+            QMessageBox.warning(self, "网络错误", "下载过程中出现网络问题，请检查您的网络连接后重试。")
+        elif "未检测到 NVIDIA GPU" in message or "未检测到 CUDA" in message:
+            QMessageBox.warning(self, "检测失败", message)
+        elif "退出码" in message or "发生异常" in message:
+            QMessageBox.warning(self, "安装失败", message)
+
+    def update_progress_bar(self, value):
+        self.progress_bar.setValue(value)
 
     def on_finished(self, success):
         if success:
             self.output_text_edit.append("环境配置完成。")
             # 提示用户重启软件以应用新的CUDA环境
-            self.output_text_edit.append("请重新启动软件以应用新的CUDA环境。")
+            QMessageBox.information(self, "配置完成", "CUDA 环境配置完成。请重新启动软件以应用新的配置。")
         else:
             self.output_text_edit.append("环境配置失败。请根据上述信息进行处理。")
+            QMessageBox.warning(self, "配置失败", "环境配置失败。请根据上述信息进行处理。")
+        self.progress_bar.setVisible(False)
         self.detect_button.setEnabled(True)

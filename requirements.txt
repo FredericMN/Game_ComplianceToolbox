@@ -13,3 +13,4 @@ pyinstaller
 transformers
 torch
 huggingface_hub
+pip
