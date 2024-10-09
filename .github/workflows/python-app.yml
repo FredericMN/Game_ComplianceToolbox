@@ -102,17 +102,31 @@ jobs:
           --hidden-import=huggingface_hub `
           main.py
 
-    - name: Compress CUDA Build Output
+    # 安装 7-Zip
+    - name: Install 7-Zip
       shell: pwsh
       run: |
-        Compress-Archive -Path "dist\ComplianceToolbox_cuda\*" -DestinationPath "ComplianceToolbox_cuda.zip"
+        # 检查 Chocolatey 是否已安装
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        }
+        # 使用 Chocolatey 安装 7-Zip
+        choco install 7zip -y
+
+    - name: Compress CUDA Build Output with 7z
+      shell: pwsh
+      run: |
+        # 使用 7z 进行最大压缩 (-mx=9 表示最大压缩率)
+        & 'C:\Program Files\7-Zip\7z.exe' a -t7z "ComplianceToolbox_cuda.7z" "dist\ComplianceToolbox_cuda\*" -mx=9
         Remove-Item -Recurse -Force "dist\ComplianceToolbox_cuda"
 
     - name: Upload CUDA Build Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ComplianceToolbox_cuda
-        path: ComplianceToolbox_cuda.zip
+        path: ComplianceToolbox_cuda.7z
 
     # 自动发布到 GitHub Releases
     - name: Read CHANGELOG
@@ -146,7 +160,7 @@ jobs:
       with:
         files: |
           ComplianceToolbox_standard.zip
-          ComplianceToolbox_cuda.zip
+          ComplianceToolbox_cuda.7z
         body_path: release_notes.txt
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
