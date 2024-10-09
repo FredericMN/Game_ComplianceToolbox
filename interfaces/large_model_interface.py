@@ -1,14 +1,18 @@
+# large_model_interface.py
+
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtWidgets import (
-    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy, QComboBox, QHBoxLayout
+    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy, QComboBox, QHBoxLayout, QListWidget, QListWidgetItem
 )
 from .base_interface import BaseInterface
 from qfluentwidgets import PrimaryPushButton
 from utils.large_model import (
-    check_and_download_model, analyze_file_with_model, check_model_configured
+    check_and_download_model, analyze_files_with_model, check_model_configured
 )
 from PySide6.QtGui import QTextCursor  # 导入 QTextCursor 类
 import torch  # 导入torch库
+import os
+
 
 class DownloadModelWorker(QObject):
     """
@@ -46,38 +50,37 @@ class DownloadModelWorker(QObject):
                 pass  # 无法解析百分比则忽略
 
 
-class AnalyzeFileWorker(QObject):
+class AnalyzeFilesWorker(QObject):
     """
-    工作线程，用于分析文件。
+    工作线程，用于分析多个文件。
     """
     progress = Signal(str)
     progress_percent = Signal(int)
-    finished = Signal(bool, dict)  # success, result_dict
+    finished = Signal(bool, list)  # success, list of result_dicts
 
-    def __init__(self, file_path, device='cpu'):
+    def __init__(self, file_paths, device='cpu'):
         super().__init__()
-        self.file_path = file_path
+        self.file_paths = file_paths
         self.device = device  # 添加设备属性
 
     def run(self):
         try:
-            # 使用大模型分析文件，传递 progress.emit 作为回调
-            result = analyze_file_with_model(
-                self.file_path, self.emit_progress, self.device)
-            self.finished.emit(True, result)
+            results = analyze_files_with_model(
+                self.file_paths, self.emit_progress, self.device)
+            self.finished.emit(True, results)
         except Exception as e:
-            self.progress.emit(f"发生错误: {str(e)}")
-            self.finished.emit(False, {})
+            self.progress.emit(f"分析过程中发生错误：{str(e)}")
+            self.finished.emit(False, [])
 
     def emit_progress(self, message):
         """
         处理进度信息，解析百分比并发射对应信号。
         """
         self.progress.emit(message)
-        if "分析进度" in message:
+        if "进度" in message:
             try:
                 # 提取百分比
-                percent_str = message.split("分析进度: ")[1].split("%")[0]
+                percent_str = message.split("进度: ")[1].split("%")[0]
                 percent = int(percent_str)
                 self.progress_percent.emit(percent)
             except:
@@ -144,22 +147,12 @@ class LargeModelInterface(BaseInterface):
         self.analysis_progress_bar.setValue(0)
         self.analysis_progress_bar.setTextVisible(True)
 
-        self.analysis_progress_text_edit = QTextEdit()
-        self.analysis_progress_text_edit.setReadOnly(True)
-        self.analysis_progress_text_edit.setPlaceholderText("大模型分析文档的进度展示")
-        self.analysis_progress_text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        bottom_layout.addWidget(self.analyze_button)
-        bottom_layout.addWidget(self.analysis_progress_bar)
-        bottom_layout.addWidget(self.analysis_progress_text_edit)
-        bottom_layout.setStretch(0, 1)
-        bottom_layout.setStretch(1, 1)
-        bottom_layout.setStretch(2, 4)  # 增加分析输出框的占比
+        self.analysis_progress_list_widget = QListWidget()
 
         # 添加说明标签
         explanation_label = QLabel(
             "说明：仅支持Word文档与Excel表格进行分析。\n"
-            "分类标签及颜色标记如下：\n"
+            "分类标签及颜色标记如下："
             "• 正常（无标记）"
             "• 低俗（绿色）"
             "• 色情（黄色）"
@@ -174,6 +167,14 @@ class LargeModelInterface(BaseInterface):
         self.layout.setStretch(0, 1)
         self.layout.setStretch(1, 4)
         self.layout.setStretch(2, 0)
+
+        # 下部布局内容
+        bottom_layout.addWidget(self.analyze_button)
+        bottom_layout.addWidget(self.analysis_progress_bar)
+        bottom_layout.addWidget(self.analysis_progress_list_widget)
+        bottom_layout.setStretch(0, 1)
+        bottom_layout.setStretch(1, 1)
+        bottom_layout.setStretch(2, 4)  # 增加分析输出框的占比
 
     def handle_device_change(self, index):
         selected = self.device_combo.currentText()
@@ -213,9 +214,9 @@ class LargeModelInterface(BaseInterface):
         self.worker.progress.connect(self.report_progress)
         self.worker.progress_percent.connect(self.download_progress_bar.setValue)
         self.worker.finished.connect(self.on_configure_finished)
-        
-        # 关键修复：确保线程在工作完成后正确退出
-        self.worker.finished.connect(self.thread.quit)  # 添加这一行
+
+        # 确保线程在工作完成后正确退出
+        self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
 
@@ -257,17 +258,22 @@ class LargeModelInterface(BaseInterface):
         file_dialog = QFileDialog(self)
         file_dialog.setWindowTitle("选择文件")
         file_dialog.setNameFilter("Word/Excel Files (*.docx *.xlsx)")
+        file_dialog.setFileMode(QFileDialog.ExistingFiles)  # 允许多文件选择
         if file_dialog.exec():
             selected_files = file_dialog.selectedFiles()
             if selected_files:
-                file_path = selected_files[0]
-                # 启动分析线程
+                self.analysis_progress_list_widget.clear()  # 清空之前的结果
+                for file_path in selected_files:
+                    list_item = QListWidgetItem(f"准备分析: {os.path.basename(file_path)}")
+                    self.analysis_progress_list_widget.addItem(list_item)
+
+                # 禁用按钮，防止重复点击
                 self.analyze_button.setEnabled(False)
-                self.analysis_progress_text_edit.clear()
                 self.analysis_progress_bar.setValue(0)
 
+                # 启动分析线程
                 self.analysis_thread = QThread()
-                self.analysis_worker = AnalyzeFileWorker(file_path, device=self.device)  # 传递设备信息
+                self.analysis_worker = AnalyzeFilesWorker(selected_files, device=self.device)  # 传递设备信息
                 self.analysis_worker.moveToThread(self.analysis_thread)
 
                 # 连接信号
@@ -275,9 +281,9 @@ class LargeModelInterface(BaseInterface):
                 self.analysis_worker.progress.connect(self.report_analysis_progress)
                 self.analysis_worker.progress_percent.connect(self.analysis_progress_bar.setValue)
                 self.analysis_worker.finished.connect(self.on_analysis_finished)
-                
-                # 关键修复：确保线程在工作完成后正确退出
-                self.analysis_worker.finished.connect(self.analysis_thread.quit)  # 添加这一行
+
+                # 确保线程在工作完成后正确退出
+                self.analysis_worker.finished.connect(self.analysis_thread.quit)
                 self.analysis_worker.finished.connect(self.analysis_worker.deleteLater)
                 self.analysis_thread.finished.connect(self.analysis_thread.deleteLater)
 
@@ -286,33 +292,48 @@ class LargeModelInterface(BaseInterface):
 
     def report_analysis_progress(self, message):
         """
-        接收工作线程发送的分析进度信息，并更新到界面上的 QTextEdit。
-        避免添加过多空行。
+        接收工作线程发送的分析进度信息，并更新到界面上的 QListWidget。
+        为了优化性能，仅在关键进度点更新。
         """
         message = message.strip()
         if message:
-            self.analysis_progress_text_edit.append(message)
-            self.analysis_progress_text_edit.moveCursor(QTextCursor.End)  # 修正 AttributeError
+            # 根据消息内容决定如何更新
+            if message.startswith("开始分析文件"):
+                current_item = self.analysis_progress_list_widget.currentItem()
+                if current_item:
+                    current_item.setText(message)
+            elif message.startswith("完成分析文件"):
+                current_item = self.analysis_progress_list_widget.currentItem()
+                if current_item:
+                    current_item.setText(message)
+            elif message.startswith("分析进度"):
+                # 可以选择不更新，或者仅更新进度条
+                pass
+            else:
+                # 其他消息可以选择性显示
+                pass
 
-    def on_analysis_finished(self, success, result):
+    def on_analysis_finished(self, success, results):
         """
         处理分析完成后的逻辑。
         显示信息框，并重新启用按钮。
         """
         if success:
-            output_text = (
-                f"识别完毕，文字总字数为 {result['total_word_count']}。\n"
-                f"分析结果：\n"
-                f"正常内容 {result['normal_count']} 段，"
-                f"低俗内容 {result['low_vulgar_count']} 段，"
-                f"色情内容 {result['porn_count']} 段，"
-                f"其他风险内容 {result['other_risk_count']} 段，"
-                f"成人内容 {result['adult_count']} 段。其中低俗、色情、其他风险、成人内容已进行颜色标记。\n"
-                f"已保存标记后的副本：{result['new_file_path']}"
-            )
-            self.analysis_progress_text_edit.append(output_text)
-            self.analysis_progress_text_edit.moveCursor(QTextCursor.End)
-            QMessageBox.information(self, "完成", f"分析完成！结果已保存到 {result['new_file_path']}")
+            for result in results:
+                output_text = (
+                    f"文件: {os.path.basename(result['file_path'])}\n"
+                    f"文字总字数: {result['total_word_count']}。\n"
+                    f"分析结果：\n"
+                    f"正常内容 {result['normal_count']} 段，"
+                    f"低俗内容 {result['low_vulgar_count']} 段，"
+                    f"色情内容 {result['porn_count']} 段，"
+                    f"其他风险内容 {result['other_risk_count']} 段，"
+                    f"成人内容 {result['adult_count']} 段。\n"
+                    f"已保存标记后的副本：{result['new_file_path']}\n"
+                )
+                list_item = QListWidgetItem(output_text)
+                self.analysis_progress_list_widget.addItem(list_item)
+            QMessageBox.information(self, "完成", "所有文件分析完成！结果已保存。")
         else:
-            QMessageBox.warning(self, "错误", "分析失败，请查看输出信息。")
+            QMessageBox.warning(self, "错误", "分析过程中发生错误，请查看输出信息。")
         self.analyze_button.setEnabled(True)
