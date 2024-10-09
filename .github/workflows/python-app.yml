@@ -39,6 +39,7 @@ jobs:
       run: |
         Get-Content requirements.txt | Out-File -FilePath requirements.txt -Encoding utf8
 
+    # 设置标准构建环境
     - name: Set up Standard Build Environment
       shell: pwsh
       run: |
@@ -62,7 +63,6 @@ jobs:
           --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
           --hidden-import=huggingface_hub `
           main.py
-        Rename-Item -Path "dist\ComplianceToolbox_standard" -NewName "ComplianceToolbox_standard"
 
     - name: Compress Standard Build Output
       shell: pwsh
@@ -76,6 +76,7 @@ jobs:
         name: ComplianceToolbox_standard
         path: ComplianceToolbox_standard.zip
 
+    # 设置 CUDA 构建环境
     - name: Set up CUDA Build Environment
       shell: pwsh
       run: |
@@ -100,7 +101,6 @@ jobs:
           --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
           --hidden-import=huggingface_hub `
           main.py
-        Rename-Item -Path "dist\ComplianceToolbox_cuda" -NewName "ComplianceToolbox_cuda"
 
     - name: Compress CUDA Build Output
       shell: pwsh
