@@ -1,13 +1,10 @@
-# interfaces/welcome_interface.py
+# welcome_interface.py
 
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QSize
 from .base_interface import BaseInterface
 from PySide6.QtGui import QFont
 from utils.environment_checker import EnvironmentChecker
-import sys
-import os
-import zipfile
 
 class WelcomeInterface(BaseInterface):
     """欢迎页界面"""
@@ -183,12 +180,3 @@ class WelcomeInterface(BaseInterface):
         self.thread.wait()
         self.thread = None
         self.environment_checker = None
-
-        # 检查并加载 torch CUDA 包
-        from main import load_torch_cuda
-        gpu_available = load_torch_cuda()
-        if gpu_available:
-            self.append_output("CUDA 加速已启用。")
-        else:
-            self.append_output("CUDA 加速未启用，使用 CPU 进行运算。")
-

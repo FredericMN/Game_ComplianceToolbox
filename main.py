@@ -4,12 +4,9 @@ import sys
 import os
 import psutil  # 导入 psutil 库
 import zipfile
-import shutil  # 导入 shutil 用于文件操作
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 from window.main_window import MainWindow
-from window.initialization_window import InitializationWindow  # 导入 InitializationWindow
-from PySide6.QtCore import Qt
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -50,12 +47,6 @@ def load_torch_cuda():
                 print("压缩包损坏，无法解压。将使用 CPU 版本的 torch。")
                 return False
 
-        # 添加解压目录及其子目录到 PATH 环境变量
-        for root, dirs, files in os.walk(torch_cuda_dir):
-            for dir in dirs:
-                lib_path = os.path.join(root, dir)
-                os.environ['PATH'] = lib_path + ";" + os.environ.get('PATH', '')
-        
         # 将解压后的目录添加到 sys.path
         sys.path.insert(0, os.path.abspath(torch_cuda_dir))
 
@@ -81,30 +72,10 @@ def load_torch_cuda():
         return False
 
 def main():
-    app = QApplication(sys.argv)
-    
-    # 创建并显示初始化窗口
-    init_window = InitializationWindow()
-    init_window.show()
-
-    # 进行环境检查和加载 torch
-    from window.main_window import MainWindow  # 确保 MainWindow 被正确导入
-
-    # 尝试加载 CUDA 版本的 torch 和 torchvision
+    # 首先，尝试加载 CUDA 版本的 torch 和 torchvision
     gpu_available = load_torch_cuda()
 
-    # 如果 CUDA 加载失败，使用 CPU 版本的 torch
-    if not gpu_available:
-        try:
-            import torch
-            print("已加载 CPU 版本的 torch。")
-            sys.modules['torch'] = torch
-        except ImportError as e:
-            print(f"加载 CPU 版本的 torch 失败: {e}")
-            sys.exit(1)  # 退出程序，因为没有可用的 torch
-
-    # 关闭初始化窗口
-    init_window.close()
+    app = QApplication(sys.argv)
     
     # 连接 aboutToQuit 信号以在应用退出时清理
     app.aboutToQuit.connect(kill_msedgedriver)
