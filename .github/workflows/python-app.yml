@@ -1,3 +1,5 @@
+# .github/workflows/build-and-release.yml
+
 name: Build and Release ComplianceToolbox
 
 on:
@@ -47,7 +49,8 @@ jobs:
         .\standard_env\Scripts\Activate.ps1
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers torch huggingface_hub -i https://pypi.org/simple/
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers torch huggingface_hub py7zr -i https://pypi.org/simple/
+        # 确保 py7zr 被安装
 
     - name: Build Standard Executable with PyInstaller
       shell: pwsh
@@ -58,10 +61,11 @@ jobs:
           --add-data "CHANGELOG.md;." `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
-          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
-          --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
-          --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
-          --hidden-import=huggingface_hub `
+          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets `
+          --hidden-import=openpyxl --hidden-import=webdriver_manager `
+          --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
+          --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers `
+          --hidden-import=torch --hidden-import=huggingface_hub --hidden-import=py7zr `
           main.py
 
     - name: Compress Standard Build Output
@@ -84,7 +88,7 @@ jobs:
         .\cuda_env\Scripts\Activate.ps1
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers huggingface_hub
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers huggingface_hub py7zr
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
     - name: Build CUDA Executable with PyInstaller
@@ -96,10 +100,11 @@ jobs:
           --add-data "CHANGELOG.md;." `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
-          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
-          --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
-          --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
-          --hidden-import=huggingface_hub `
+          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets `
+          --hidden-import=openpyxl --hidden-import=webdriver_manager `
+          --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
+          --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers `
+          --hidden-import=torch --hidden-import=huggingface_hub --hidden-import=py7zr `
           main.py
 
     # 安装 7-Zip

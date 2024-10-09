@@ -3,7 +3,7 @@
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject, QUrl, QSize
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QFrame,
-    QMessageBox, QTextEdit, QApplication, QSizePolicy
+    QMessageBox, QTextEdit, QApplication, QSizePolicy, QDialog, QDialogButtonBox
 )
 from PySide6.QtGui import QIcon, QDesktopServices, QFont
 from .base_interface import BaseInterface
@@ -11,6 +11,7 @@ from utils.version import __version__
 from utils.version_checker import VersionChecker, VersionCheckWorker, DownloadWorker
 import os
 import sys
+import py7zr  # 确保已安装 py7zr
 
 def resource_path(relative_path):
     """获取资源文件的绝对路径，兼容开发和打包后的环境"""
@@ -20,6 +21,44 @@ def resource_path(relative_path):
     except AttributeError:
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     return os.path.join(base_path, relative_path)
+
+class VersionSelectionDialog(QDialog):
+    """版本选择对话框"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择下载版本")
+        self.setModal(True)
+        self.setFixedSize(400, 200)
+        layout = QVBoxLayout()
+
+        info_label = QLabel("请选择要下载的版本：")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        self.button_box = QDialogButtonBox()
+        self.cpu_button = QPushButton("下载CPU版")
+        self.gpu_button = QPushButton("下载GPU版")
+        self.cancel_button = QPushButton("取消更新")
+        self.button_box.addButton(self.cpu_button, QDialogButtonBox.ActionRole)
+        self.button_box.addButton(self.gpu_button, QDialogButtonBox.ActionRole)
+        self.button_box.addButton(self.cancel_button, QDialogButtonBox.RejectRole)
+
+        layout.addWidget(self.button_box)
+        self.setLayout(layout)
+
+        self.cpu_button.clicked.connect(self.accept_cpu)
+        self.gpu_button.clicked.connect(self.accept_gpu)
+        self.cancel_button.clicked.connect(self.reject)
+
+        self.selected_version = None  # 'cpu', 'gpu', or None
+
+    def accept_cpu(self):
+        self.selected_version = 'cpu'
+        self.accept()
+
+    def accept_gpu(self):
+        self.selected_version = 'gpu'
+        self.accept()
 
 class SettingsInterface(BaseInterface):
     """设定界面"""
@@ -205,50 +244,50 @@ class SettingsInterface(BaseInterface):
     def report_progress(self, message):
         self.output_text_edit.append(message)
 
-    def on_update_check_finished(self, is_new_version, latest_version, download_url, release_notes):
+    def on_update_check_finished(self, is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes):
         """处理版本检测完成后的逻辑"""
         if is_new_version:
             msg = (
                 f"当前版本: {self.current_version}\n"
                 f"最新版本: {latest_version}\n\n"
                 f"更新内容:\n{release_notes}\n\n"
-                f"是否下载并更新到最新版本？"
+                f"请选择下载的版本。"
             )
-            reply = QMessageBox.question(
-                self,
-                "发现新版本",
-                msg,
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes and download_url:
-                # 开始下载
+            # 使用自定义对话框让用户选择下载版本
+            dialog = VersionSelectionDialog(self)
+            dialog.setWindowTitle("发现新版本")
+            dialog.exec()
 
-                # 如果已有下载线程在运行，先停止
-                if self.download_thread and self.download_thread.isRunning():
-                    self.download_thread.quit()
-                    self.download_thread.wait()
-
-                self.output_text_edit.append("开始下载最新版本...")
-                self.download_thread = QThread()
-                self.download_worker = DownloadWorker(download_url)
-                self.download_worker.moveToThread(self.download_thread)
-
-                self.download_thread.started.connect(self.download_worker.run)
-                self.download_worker.progress.connect(self.report_progress)
-                self.download_worker.finished.connect(self.on_download_finished)
-                self.download_worker.finished.connect(self.download_worker.deleteLater)
-                self.download_thread.finished.connect(self.download_thread.deleteLater)
-
-                self.download_thread.start()
+            if dialog.selected_version == 'cpu' and cpu_download_url:
+                self.start_download(cpu_download_url)
+            elif dialog.selected_version == 'gpu' and gpu_download_url:
+                self.start_download(gpu_download_url)
             else:
                 self.output_text_edit.append("用户取消了更新。")
-                self.check_update_button.setEnabled(True)
         elif latest_version:
             self.output_text_edit.append("当前已是最新版本。")
-            self.check_update_button.setEnabled(True)
         else:
             self.output_text_edit.append("无法获取最新版本信息。")
-            self.check_update_button.setEnabled(True)
+        self.check_update_button.setEnabled(True)
+
+    def start_download(self, download_url):
+        """开始下载指定的版本"""
+        if self.download_thread and self.download_thread.isRunning():
+            self.download_thread.quit()
+            self.download_thread.wait()
+
+        self.output_text_edit.append("开始下载更新文件...")
+        self.download_thread = QThread()
+        self.download_worker = DownloadWorker(download_url)
+        self.download_worker.moveToThread(self.download_thread)
+
+        self.download_thread.started.connect(self.download_worker.run)
+        self.download_worker.progress.connect(self.report_progress)
+        self.download_worker.finished.connect(self.on_download_finished)
+        self.download_worker.finished.connect(self.download_worker.deleteLater)
+        self.download_thread.finished.connect(self.download_thread.deleteLater)
+
+        self.download_thread.start()
 
     def on_download_finished(self, success, file_path):
         if success:
@@ -273,27 +312,36 @@ class SettingsInterface(BaseInterface):
             QMessageBox.warning(self, "下载失败", "下载最新版本时出错，请稍后重试。")
         self.check_update_button.setEnabled(True)
 
-    def update_application(self, zip_file_path):
-        import zipfile
+    def update_application(self, downloaded_file_path):
         import shutil
-        import sys
-        import os
         import subprocess
 
-        # 解压缩到临时目录
+        # 创建临时目录
         temp_dir = os.path.join(os.getcwd(), "update_temp")
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         os.makedirs(temp_dir)
 
-        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
+        # 根据文件类型解压
+        filename = os.path.basename(downloaded_file_path)
+        try:
+            if filename.endswith('.zip'):
+                import zipfile
+                with zipfile.ZipFile(downloaded_file_path, 'r') as zip_ref:
+                    zip_ref.extractall(temp_dir)
+            elif filename.endswith('.7z'):
+                with py7zr.SevenZipFile(downloaded_file_path, mode='r') as z:
+                    z.extractall(path=temp_dir)
+            else:
+                raise Exception("未知的文件格式。")
+        except Exception as e:
+            raise Exception(f"解压缩失败：{str(e)}")
 
         try:
             app_dir = os.getcwd()
             update_script = os.path.join(app_dir, 'update.bat')
-            executable_name = 'ComplianceToolbox.exe'
-            zip_file_name = os.path.basename(zip_file_path)
+            executable_name = os.path.basename(sys.argv[0])
+            zip_file_name = os.path.basename(downloaded_file_path)
 
             with open(update_script, 'w', encoding='utf-8') as f:
                 f.write(f"""
@@ -306,15 +354,15 @@ if "%ERRORLEVEL%"=="0" (
     timeout /t 2 > nul
     goto waitloop
 )
-xcopy /E /Y "%~dp0update_temp\\*" "%~dp0" > nul
-rd /S /Q "%~dp0update_temp"
-del "%~dp0{zip_file_name}"
-start "" "%~dp0{executable_name}"
+xcopy /E /Y "{temp_dir}\\*" "{app_dir}\\" > nul
+rd /S /Q "{temp_dir}"
+del "{app_dir}\\{zip_file_name}"
+start "" "{app_dir}\\{executable_name}"
 del "%~f0"
                 """)
             self.output_text_edit.append("更新完成，正在重启应用...")
             # 启动更新脚本
-            subprocess.Popen([update_script])
+            subprocess.Popen([update_script], shell=True)
             # 退出当前应用
             QApplication.quit()
         except Exception as e:

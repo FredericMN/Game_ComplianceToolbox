@@ -8,7 +8,7 @@ import threading
 
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 OWNER = "FredericMN"  # 替换为你的 GitHub 用户名
-REPO = "Game_ComplianceToolbox"       # 替换为你的仓库名称
+REPO = "Game_ComplianceToolbox"  # 替换为你的仓库名称
 
 class VersionChecker:
     def __init__(self):
@@ -54,16 +54,20 @@ class VersionChecker:
                 return -1
         return 0
 
-    def get_download_url(self):
-        # 查找名为 "ComplianceToolbox.zip" 的资产
+    def get_download_urls(self):
+        """获取标准版和CUDA版的下载链接"""
+        cpu_url = None
+        gpu_url = None
         for asset in self.assets:
-            if asset['name'] == "ComplianceToolbox.zip":
-                return asset['browser_download_url']
-        return None
+            if asset['name'] == "ComplianceToolbox_standard.zip":
+                cpu_url = asset['browser_download_url']
+            elif asset['name'] == "ComplianceToolbox_cuda.7z":
+                gpu_url = asset['browser_download_url']
+        return cpu_url, gpu_url
 
 class VersionCheckWorker(QObject):
     progress = Signal(str)
-    finished = Signal(bool, str, str, str)  # is_new_version, latest_version, download_url, release_notes
+    finished = Signal(bool, str, str, str, str)  # is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes
 
     def __init__(self, version_checker: VersionChecker):
         super().__init__()
@@ -74,19 +78,18 @@ class VersionCheckWorker(QObject):
             self.progress.emit("正在获取最新版本信息...")
             self.version_checker.check_latest_version()
             if self.version_checker.is_new_version_available():
-                download_url = self.version_checker.get_download_url()
-                if not download_url:
+                cpu_url, gpu_url = self.version_checker.get_download_urls()
+                if not cpu_url and not gpu_url:
                     self.progress.emit("未找到可用的更新文件。")
-                    self.finished.emit(False, None, None, None)
+                    self.finished.emit(False, None, None, None, None)
                     return
                 self.progress.emit(f"发现新版本：{self.version_checker.latest_version}")
-                self.finished.emit(True, self.version_checker.latest_version, download_url, self.version_checker.release_notes)
+                self.finished.emit(True, self.version_checker.latest_version, cpu_url, gpu_url, self.version_checker.release_notes)
             else:
-                # self.progress.emit("当前已是最新版本。")
-                self.finished.emit(False, self.version_checker.latest_version, None, None)
+                self.finished.emit(False, self.version_checker.latest_version, None, None, None)
         except Exception as e:
             self.progress.emit(f"检查更新失败: {str(e)}")
-            self.finished.emit(False, None, None, None)
+            self.finished.emit(False, None, None, None, None)
 
 class DownloadWorker(QObject):
     progress = Signal(str)
