@@ -160,10 +160,10 @@ class LargeModelInterface(BaseInterface):
         explanation_label = QLabel(
             "说明：仅支持Word文档与Excel表格进行分析。\n"
             "分类标签及颜色标记如下：\n"
-            "• 正常（无标记）\n"
-            "• 低俗（绿色）\n"
-            "• 色情（黄色）\n"
-            "• 其他风险（红色）\n"
+            "• 正常（无标记）"
+            "• 低俗（绿色）"
+            "• 色情（黄色）"
+            "• 其他风险（红色）"
             "• 成人（蓝色）"
         )
 

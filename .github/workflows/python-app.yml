@@ -39,22 +39,20 @@ jobs:
       run: |
         Get-Content requirements.txt | Out-File -FilePath requirements.txt -Encoding utf8
 
-    - name: Install dependencies
+    - name: Set up Standard Build Environment
+      shell: pwsh
       run: |
+        python -m venv standard_env
+        .\standard_env\Scripts\Activate.ps1
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers torch huggingface_hub -i https://pypi.org/simple/
 
-    - name: Install additional dependencies
+    - name: Build Standard Executable with PyInstaller
+      shell: pwsh
       run: |
-        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers torch huggingface_hub pip -i https://pypi.org/simple/
-
-    - name: Verify PyInstaller installation
-      run: |
-        python -m pip show pyinstaller || python -m pip install pyinstaller
-
-    - name: Build executable with PyInstaller
-      run: |
-        pyinstaller --name "ComplianceToolbox" --windowed --icon=resources/logo.ico `
+        .\standard_env\Scripts\Activate.ps1
+        pyinstaller --name "ComplianceToolbox_standard" --windowed --icon=resources/logo.ico `
           --add-data "resources;resources" --add-data "styles;styles" `
           --add-data "CHANGELOG.md;." `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
@@ -62,30 +60,59 @@ jobs:
           --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
           --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
           --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
-          --hidden-import=huggingface_hub --hidden-import=pip `
+          --hidden-import=huggingface_hub `
           main.py
+        Rename-Item -Path "dist\ComplianceToolbox_standard" -NewName "ComplianceToolbox_standard"
 
-    - name: List build directory
+    - name: Compress Standard Build Output
+      shell: pwsh
       run: |
-        dir dist
+        Compress-Archive -Path "dist\ComplianceToolbox_standard\*" -DestinationPath "ComplianceToolbox_standard.zip"
+        Remove-Item -Recurse -Force "dist\ComplianceToolbox_standard"
 
-    - name: Verify executable exists
-      run: |
-        if (-not (Test-Path "dist\ComplianceToolbox\ComplianceToolbox.exe")) {
-            Write-Output "Executable not found!"
-            exit 1
-        }
-
-    - name: Compress build output
-      run: |
-        Compress-Archive -Path "dist\ComplianceToolbox\*" -DestinationPath "ComplianceToolbox.zip"
-        dir
-
-    - name: Upload build artifact
+    - name: Upload Standard Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ComplianceToolbox
-        path: dist/ComplianceToolbox/**
+        name: ComplianceToolbox_standard
+        path: ComplianceToolbox_standard.zip
+
+    - name: Set up CUDA Build Environment
+      shell: pwsh
+      run: |
+        python -m venv cuda_env
+        .\cuda_env\Scripts\Activate.ps1
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install selenium PySide6 "PySide6-Fluent-Widgets[full]" psutil openpyxl webdriver-manager pandas xlrd requests pyinstaller python-docx transformers huggingface_hub
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+    - name: Build CUDA Executable with PyInstaller
+      shell: pwsh
+      run: |
+        .\cuda_env\Scripts\Activate.ps1
+        pyinstaller --name "ComplianceToolbox_cuda" --windowed --icon=resources/logo.ico `
+          --add-data "resources;resources" --add-data "styles;styles" `
+          --add-data "CHANGELOG.md;." `
+          --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
+          --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
+          --hidden-import=PySide6.QtWidgets --hidden-import=qfluentwidgets --hidden-import=openpyxl `
+          --hidden-import=webdriver_manager --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
+          --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers --hidden-import=torch `
+          --hidden-import=huggingface_hub `
+          main.py
+        Rename-Item -Path "dist\ComplianceToolbox_cuda" -NewName "ComplianceToolbox_cuda"
+
+    - name: Compress CUDA Build Output
+      shell: pwsh
+      run: |
+        Compress-Archive -Path "dist\ComplianceToolbox_cuda\*" -DestinationPath "ComplianceToolbox_cuda.zip"
+        Remove-Item -Recurse -Force "dist\ComplianceToolbox_cuda"
+
+    - name: Upload CUDA Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ComplianceToolbox_cuda
+        path: ComplianceToolbox_cuda.zip
 
     # 自动发布到 GitHub Releases
     - name: Read CHANGELOG
@@ -93,18 +120,33 @@ jobs:
       shell: pwsh
       run: |
         $content = Get-Content 'CHANGELOG.md' -Raw
-        $regex = "(?s)(?<=##\s${{ github.ref_name }}\s).+?(?=##)"
+        $current_tag = "${{ github.ref_name }}"
+        $regex = "(?s)(?<=##\s$current_tag\s).+?(?=##)"
         if ($content -match $regex) {
             $matches[0] | Out-File -FilePath release_notes.txt
         } else {
             $content | Out-File -FilePath release_notes.txt
         }
 
+    - name: Download Standard Build Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ComplianceToolbox_standard
+        path: .
+
+    - name: Download CUDA Build Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ComplianceToolbox_cuda
+        path: .
+
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: ComplianceToolbox.zip
+        files: |
+          ComplianceToolbox_standard.zip
+          ComplianceToolbox_cuda.zip
         body_path: release_notes.txt
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}

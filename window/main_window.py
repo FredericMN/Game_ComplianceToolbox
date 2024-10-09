@@ -24,7 +24,6 @@ from interfaces.welcome_interface import WelcomeInterface
 from interfaces.detection_tool_interface import DetectionToolInterface
 from interfaces.crawler_interface import CrawlerInterface
 from interfaces.vocabulary_comparison_interface import VocabularyComparisonInterface
-from interfaces.environment_config_interface import EnvironmentConfigInterface  # 导入新界面
 from interfaces.empty_interface import EmptyInterface
 from interfaces.settings_interface import SettingsInterface
 from interfaces.version_matching_interface import VersionMatchingInterface
@@ -58,7 +57,6 @@ class MainWindow(FramelessWindow):
         self.detectionToolInterface = DetectionToolInterface(self)
         self.crawlerInterface = CrawlerInterface(self)
         self.vocabularyComparisonInterface = VocabularyComparisonInterface(self)  # 实例化新的界面
-        self.environmentConfigInterface = EnvironmentConfigInterface(self)  # 实例化新界面
         self.largeModelInterface = LargeModelInterface(self)
         self.developingInterface = EmptyInterface(parent=self)  # 修改此行
         self.settingsInterface = SettingsInterface(self)
@@ -108,10 +106,6 @@ class MainWindow(FramelessWindow):
 
         self.add_sub_interface(
             self.largeModelInterface, FIF.PROJECTOR, "大模型语义分析"
-        )
-
-        self.add_sub_interface(
-            self.environmentConfigInterface, FIF.BRUSH, "GPU加速环境配置"  # 添加新导航项
         )
 
         self.add_sub_interface(
