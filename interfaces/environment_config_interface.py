@@ -4,10 +4,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QTextEdit
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-import subprocess
-import shutil
 import sys
 import os
+import subprocess
+import shutil
 
 class EnvironmentConfigWorker(QObject):
     progress = Signal(str)
@@ -55,46 +55,44 @@ class EnvironmentConfigWorker(QObject):
                 self.progress.emit("已检测到 CUDA 安装。")
 
             # 定义本地安装目录
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
-            local_libs = os.path.join(project_root, 'local_libs')
-
-            if not os.path.exists(local_libs):
-                os.makedirs(local_libs)
-                self.progress.emit(f"已创建本地库目录: {local_libs}")
+            if not os.path.exists(self.target_dir):
+                os.makedirs(self.target_dir)
+                self.progress.emit(f"已创建本地库目录: {self.target_dir}")
             else:
-                self.progress.emit(f"本地库目录已存在: {local_libs}")
+                self.progress.emit(f"本地库目录已存在: {self.target_dir}")
 
-            # 定义 pip 安装命令（指定 CUDA 12.1）
+            # 使用 pip 的内部 API 安装包
+            import pip
+            from pip._internal.cli.main import main as pip_main
+
             install_commands = [
-                [
-                    sys.executable, "-m", "pip", "install",
-                    "torch==2.4.1+cu121",
-                    "torchvision==0.19.1+cu121",
-                    "torchaudio==2.4.1+cu121",
-                    "--index-url", "https://download.pytorch.org/whl/cu121",
-                    "--target", local_libs
-                ]
+                "torch==2.4.1+cu121",
+                "torchvision==0.19.1+cu121",
+                "torchaudio==2.4.1+cu121"
             ]
 
-            # 执行 pip 安装命令
-            for cmd in install_commands:
-                self.progress.emit(f"正在安装 {' '.join(cmd[3:7])} 到 {self.target_dir}...")
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-                for line in process.stdout:
-                    self.progress.emit(line.strip())
-                process.wait()
-                if process.returncode != 0:
-                    self.progress.emit(f"安装过程中出现错误，退出码 {process.returncode}。")
-                    self.finished.emit(False)
-                    return
-                else:
-                    self.progress.emit("安装完成。")
+            self.progress.emit(f"正在安装 {' '.join(install_commands)} 到 {self.target_dir}...")
+
+            # 安装命令参数
+            args = [
+                "install",
+                "--no-cache-dir",
+                "--upgrade",
+                "--index-url", "https://download.pytorch.org/whl/cu121",
+                "--target", self.target_dir
+            ] + install_commands
+
+            self.progress.emit(f"pip install 参数: {' '.join(args)}")
+
+            # 调用 pip 安装
+            result = pip_main(args)
+
+            if result != 0:
+                self.progress.emit(f"安装过程中出现错误，退出码 {result}。")
+                self.finished.emit(False)
+                return
+            else:
+                self.progress.emit("安装完成。")
 
             self.progress.emit("CUDA 环境配置成功。")
             self.finished.emit(True)
@@ -123,7 +121,7 @@ class EnvironmentConfigInterface(QWidget):
         self.layout.addWidget(self.explanation_label)
 
         # 检测并配置按钮
-        self.detect_button = QPushButton("检测并配置CUDA环境")
+        self.detect_button = QPushButton("检测并配置环境")
         self.detect_button.clicked.connect(self.handle_detect_and_configure)
         self.layout.addWidget(self.detect_button)
 

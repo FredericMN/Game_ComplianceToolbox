@@ -14,7 +14,11 @@ local_libs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
 if os.path.exists(local_libs_path):
     sys.path.insert(0, local_libs_path)
 
-import torch  # 导入torch库
+# 延迟导入 torch，避免在未安装时崩溃
+try:
+    import torch  # 如果需要使用 torch，可以在这里导入
+except ImportError:
+    torch = None  # 或者提供降级方案
 
 from interfaces.welcome_interface import WelcomeInterface
 from interfaces.detection_tool_interface import DetectionToolInterface
@@ -55,10 +59,10 @@ class MainWindow(FramelessWindow):
         self.crawlerInterface = CrawlerInterface(self)
         self.vocabularyComparisonInterface = VocabularyComparisonInterface(self)  # 实例化新的界面
         self.environmentConfigInterface = EnvironmentConfigInterface(self)  # 实例化新界面
+        self.largeModelInterface = LargeModelInterface(self)
         self.developingInterface = EmptyInterface(parent=self)  # 修改此行
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
-        self.largeModelInterface = LargeModelInterface(self)
 
         # 初始化布局和导航栏
         self.init_layout()
@@ -107,7 +111,7 @@ class MainWindow(FramelessWindow):
         )
 
         self.add_sub_interface(
-            self.environmentConfigInterface, FIF.BUS, "GPU加速环境配置"  # 添加新导航项
+            self.environmentConfigInterface, FIF.BRUSH, "GPU加速环境配置"  # 添加新导航项
         )
 
         self.add_sub_interface(
