@@ -1,13 +1,65 @@
 # detection_tool_interface.py
 import os
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtWidgets import (
-    QLabel, QHBoxLayout, QVBoxLayout, QTextEdit, QPushButton, QFileDialog, QMessageBox, QListWidget, QListWidgetItem
+    QLabel, QHBoxLayout, QVBoxLayout, QTextEdit, QPushButton,
+    QFileDialog, QMessageBox, QListWidget, QListWidgetItem, QProgressBar
 )
 from .base_interface import BaseInterface
 from utils.detection import (
     initialize_words, detect_language, update_words as update_words_func
 )
+from PySide6.QtGui import QTextCursor  # 如果需要其他文本处理功能
+
+class DetectionWorker(QObject):
+    """
+    工作线程，用于批量检测文件中的风险词汇。
+    """
+    progress = Signal(str)
+    progress_percent = Signal(int)
+    finished = Signal(bool, list)  # success, list of result_dicts
+
+    def __init__(self, file_paths, violent_words, inducing_words):
+        super().__init__()
+        self.file_paths = file_paths
+        self.violent_words = violent_words
+        self.inducing_words = inducing_words
+
+    def run(self):
+        results = []
+        total_files = len(self.file_paths)
+        if total_files == 0:
+            self.progress.emit("没有选择任何文件。")
+            self.finished.emit(False, results)
+            return
+
+        for idx, file_path in enumerate(self.file_paths, start=1):
+            try:
+                self.progress.emit(f"开始检测文件 {idx}/{total_files}: {os.path.basename(file_path)}")
+                violent_count, inducing_count, total_word_count, new_file_path = detect_language(
+                    file_path, self.violent_words, self.inducing_words
+                )
+                result = {
+                    'file_name': os.path.basename(file_path),
+                    'total_word_count': total_word_count,
+                    'violent_count': violent_count,
+                    'inducing_count': inducing_count,
+                    'new_file_path': new_file_path
+                }
+                results.append(result)
+                self.progress.emit(f"完成检测文件 {idx}/{total_files}: {os.path.basename(file_path)}")
+            except Exception as e:
+                self.progress.emit(f"文件 {os.path.basename(file_path)} 检测过程中发生错误：{str(e)}")
+                result = {
+                    'file_name': os.path.basename(file_path),
+                    'error': str(e)
+                }
+                results.append(result)
+            # 更新进度百分比
+            percent = int((idx / total_files) * 100)
+            self.progress_percent.emit(percent)
+
+        self.finished.emit(True, results)
 
 class DetectionToolInterface(BaseInterface):
     """不文明用语检测工具界面"""
@@ -16,6 +68,7 @@ class DetectionToolInterface(BaseInterface):
         self.violent_words, self.inducing_words = initialize_words()
         super().__init__(parent)
         self.init_ui()
+        self.thread = None  # 初始化线程引用
 
     def init_ui(self):
         # 顶部布局，包含两个输入区域
@@ -49,6 +102,13 @@ class DetectionToolInterface(BaseInterface):
         buttons_layout.addWidget(self.update_button)
         buttons_layout.addWidget(self.select_button)
 
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)  # 初始隐藏
+
         # 结果输出区域
         result_label = QLabel("结果输出区域")
         self.result_list_widget = QListWidget()
@@ -61,6 +121,7 @@ class DetectionToolInterface(BaseInterface):
         # 将各个布局添加到主布局
         self.layout.addLayout(top_layout)
         self.layout.addLayout(buttons_layout)
+        self.layout.addWidget(self.progress_bar)
         self.layout.addWidget(result_label)
         self.layout.addWidget(self.result_list_widget)
         self.layout.addWidget(explanation_label)  # 添加说明标签到UI布局
@@ -94,25 +155,78 @@ class DetectionToolInterface(BaseInterface):
             selected_files = file_dialog.selectedFiles()
             if selected_files:
                 self.result_list_widget.clear()  # 清空之前的结果
-                for file_path in selected_files:
-                    try:
-                        violent_count, inducing_count, total_word_count, new_file_path = detect_language(
-                            file_path, self.violent_words, self.inducing_words
-                        )
-                        output_text = (
-                            f"文件: {os.path.basename(file_path)}\n"
-                            f"文字总字数: {total_word_count}\n"
-                            f"血腥暴力词汇: {violent_count} 个\n"
-                            f"不良诱导词汇: {inducing_count} 个\n"
-                            f"已保存标记后的副本: {new_file_path}\n"
-                        )
-                        list_item = QListWidgetItem(output_text)
-                        self.result_list_widget.addItem(list_item)
-                    except Exception as e:
-                        error_text = (
-                            f"文件: {os.path.basename(file_path)}\n"
-                            f"检测过程中发生错误：{str(e)}\n"
-                        )
-                        list_item = QListWidgetItem(error_text)
-                        self.result_list_widget.addItem(list_item)
-                QMessageBox.information(self, "完成", "所有文件检测完成！")
+                self.progress_bar.setValue(0)
+                self.progress_bar.setVisible(True)
+                self.progress_bar.setFormat("检测进度: 0%")
+                
+                # 禁用按钮，防止重复点击
+                self.select_button.setEnabled(False)
+                self.update_button.setEnabled(False)
+
+                # 启动检测线程
+                self.thread = QThread()
+                self.worker = DetectionWorker(selected_files, self.violent_words, self.inducing_words)
+                self.worker.moveToThread(self.thread)
+
+                # 连接信号
+                self.thread.started.connect(self.worker.run)
+                self.worker.progress.connect(self.report_progress)
+                self.worker.progress_percent.connect(self.update_progress_bar)
+                self.worker.finished.connect(self.on_detection_finished)
+
+                # 确保线程在工作完成后正确退出
+                self.worker.finished.connect(self.thread.quit)
+                self.worker.finished.connect(self.worker.deleteLater)
+                self.thread.finished.connect(self.thread.deleteLater)
+
+                # 启动线程
+                self.thread.start()
+
+    def report_progress(self, message):
+        """
+        接收工作线程发送的进度信息，并更新到界面上的 QListWidget。
+        """
+        if message:
+            list_item = QListWidgetItem(message)
+            self.result_list_widget.addItem(list_item)
+            self.result_list_widget.scrollToBottom()
+
+    def update_progress_bar(self, percent):
+        """
+        更新进度条的值。
+        """
+        self.progress_bar.setValue(percent)
+        self.progress_bar.setFormat(f"检测进度: {percent}%")
+
+    def on_detection_finished(self, success, results):
+        """
+        处理检测完成后的逻辑。
+        显示结果，并重新启用按钮。
+        """
+        if success:
+            for result in results:
+                if 'error' in result:
+                    output_text = (
+                        f"文件: {result['file_name']}\n"
+                        f"检测过程中发生错误：{result['error']}\n"
+                    )
+                else:
+                    output_text = (
+                        f"文件: {result['file_name']}\n"
+                        f"文字总字数: {result['total_word_count']}\n"
+                        f"血腥暴力词汇: {result['violent_count']} 个\n"
+                        f"不良诱导词汇: {result['inducing_count']} 个\n"
+                        f"已保存标记后的副本: {result['new_file_path']}\n"
+                    )
+                list_item = QListWidgetItem(output_text)
+                self.result_list_widget.addItem(list_item)
+            QMessageBox.information(self, "完成", "所有文件检测完成！")
+        else:
+            QMessageBox.warning(self, "错误", "检测过程中发生错误，请查看输出信息。")
+
+        # 重置进度条和按钮状态
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("检测进度: 0%")
+        self.select_button.setEnabled(True)
+        self.update_button.setEnabled(True)
