@@ -1,3 +1,5 @@
+# welcome_interface.py
+
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from .base_interface import BaseInterface

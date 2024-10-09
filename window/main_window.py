@@ -1,3 +1,5 @@
+# main_window.py
+
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QStackedWidget, QMessageBox
 from PySide6.QtGui import QIcon
 from qfluentwidgets import (
