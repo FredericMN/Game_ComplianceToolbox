@@ -58,7 +58,7 @@ class AnalyzeFilesWorker(QObject):
     progress_percent = Signal(int)
     finished = Signal(bool, list)  # success, list of result_dicts
 
-    def __init__(self, file_paths, device='cpu', normal_threshold=0.8, other_threshold=0.01):
+    def __init__(self, file_paths, device='cpu', normal_threshold=0.8, other_threshold=0.1):
         super().__init__()
         self.file_paths = file_paths
         self.device = device  # 添加设备属性
@@ -151,13 +151,13 @@ class LargeModelInterface(BaseInterface):
 
         # NORMAL_THRESHOLD 输入框
         normal_label = QLabel("正常阈值 (0-1):")
-        self.normal_input = QLineEdit("0.95")
+        self.normal_input = QLineEdit("0.8")
         self.normal_input.setValidator(QDoubleValidator(0.00, 1.00, 2))
         self.normal_input.setFixedWidth(60)
 
         # OTHER_THRESHOLD 输入框
         other_label = QLabel("其他阈值 (0-1):")
-        self.other_input = QLineEdit("0.50")
+        self.other_input = QLineEdit("0.1")
         self.other_input.setValidator(QDoubleValidator(0.00, 1.00, 2))
         self.other_input.setFixedWidth(60)
 
