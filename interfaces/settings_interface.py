@@ -1,4 +1,4 @@
-# interfaces/settings_interface.py
+# interfaces/settings_interface.py 
 
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject, QUrl, QSize
 from PySide6.QtWidgets import (
@@ -211,6 +211,7 @@ class SettingsInterface(BaseInterface):
         if self.update_thread and self.update_thread.isRunning():
             self.update_thread.quit()
             self.update_thread.wait()
+            self.update_thread = None  # 将线程引用设为 None
 
         self.update_thread = QThread()
         self.version_checker = VersionChecker()
@@ -220,13 +221,19 @@ class SettingsInterface(BaseInterface):
         self.update_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.on_update_check_finished)
         self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self.update_thread.quit)  # 确保线程退出
         self.update_thread.finished.connect(self.update_thread.deleteLater)
+        self.update_thread.finished.connect(lambda: self._clear_thread_reference('update_thread'))
 
         self.worker.progress.connect(self.report_progress)
 
         self.update_thread.start()
 
-        self.worker.finished.connect(lambda: self.check_update_button.setEnabled(True))
+        # 不需要在这里再次连接，因为按钮已经在 on_update_check_finished 中重新启用
+
+    def _clear_thread_reference(self, thread_name):
+        """清除线程引用以避免引用已删除的对象"""
+        setattr(self, thread_name, None)
 
     def report_progress(self, message):
         self.output_text_edit.append(message)
@@ -260,6 +267,7 @@ class SettingsInterface(BaseInterface):
         if self.download_thread and self.download_thread.isRunning():
             self.download_thread.quit()
             self.download_thread.wait()
+            self.download_thread = None  # 将线程引用设为 None
 
         self.output_text_edit.append("开始下载更新文件...")
         self.download_progress_bar.setValue(0)
@@ -278,9 +286,11 @@ class SettingsInterface(BaseInterface):
 
         self.download_thread.started.connect(self.download_worker.run)
         self.download_worker.progress.connect(self.report_download_progress)
-        self.download_worker.finished.connect(lambda success, path: self.on_download_finished(success, path))
+        self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.finished.connect(self.download_worker.deleteLater)
+        self.download_worker.finished.connect(self.download_thread.quit)  # 确保线程退出
         self.download_thread.finished.connect(self.download_thread.deleteLater)
+        self.download_thread.finished.connect(lambda: self._clear_thread_reference('download_thread'))
 
         self.download_thread.start()
 
@@ -298,10 +308,14 @@ class SettingsInterface(BaseInterface):
                 "下载完成",
                 f"最新版本压缩包已下载到：\n{file_path}\n\n请关闭软件，解压并安装新版本。"
             )
-            # 自动打开下载文件夹
+            # 使用 QTimer.singleShot 确保消息框关闭后再打开文件夹
             download_folder = os.path.dirname(file_path)
-            QDesktopServices.openUrl(QUrl.fromLocalFile(download_folder))
+            if os.path.exists(download_folder):
+                QTimer.singleShot(0, lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(download_folder)))
+            else:
+                self.output_text_edit.append("下载文件夹不存在，无法打开。")
         else:
             self.output_text_edit.append(f"下载失败：{file_path}")
             QMessageBox.warning(self, "下载失败", f"下载最新版本时出错：{file_path}\n请检查网络连接或文件写入权限。")
         self.check_update_button.setEnabled(True)
+
