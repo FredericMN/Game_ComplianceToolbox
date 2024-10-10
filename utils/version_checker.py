@@ -92,7 +92,7 @@ class VersionCheckWorker(QObject):
             self.finished.emit(False, None, None, None, None)
 
 class DownloadWorker(QObject):
-    progress = Signal(str)
+    progress = Signal(int, str)  # percent, message
     finished = Signal(bool, str)  # success, file_path
 
     def __init__(self, download_url):
@@ -104,7 +104,7 @@ class DownloadWorker(QObject):
             response = requests.get(self.download_url, stream=True, timeout=30)
             total_length = response.headers.get('content-length')
             if total_length is None:
-                self.progress.emit("无法获取文件大小。")
+                self.progress.emit(0, "无法获取文件大小。")
                 self.finished.emit(False, None)
                 return
             total_length = int(total_length)
@@ -117,8 +117,14 @@ class DownloadWorker(QObject):
                         f.write(data)
                         downloaded += len(data)
                         percent = int(downloaded * 100 / total_length)
-                        self.progress.emit(f"下载进度：{percent}%")
+                        self.progress.emit(percent, f"下载进度：{percent}%")
             self.finished.emit(True, save_path)
         except requests.RequestException as e:
-            self.progress.emit(f"下载失败：{str(e)}")
+            self.progress.emit(0, f"下载失败：{str(e)}")
+            self.finished.emit(False, None)
+        except PermissionError:
+            self.progress.emit(0, "文件写入权限不足。")
+            self.finished.emit(False, None)
+        except Exception as e:
+            self.progress.emit(0, f"下载过程中发生错误：{str(e)}")
             self.finished.emit(False, None)
