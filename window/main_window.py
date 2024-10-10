@@ -185,7 +185,6 @@ class MainWindow(FramelessWindow):
             msg = (
                 f"当前版本: {self.version_checker.current_version}\n"
                 f"最新版本: {latest_version}\n\n"
-                f"更新内容:\n{release_notes}\n\n"
                 f"是否前往更新？"
             )
             reply = QMessageBox.question(

@@ -12,6 +12,10 @@ from utils.version_checker import VersionChecker, VersionCheckWorker, DownloadWo
 import os
 import sys
 
+GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
+OWNER = "FredericMN"  # 替换为你的 GitHub 用户名
+REPO = "Game_ComplianceToolbox"  # 替换为你的仓库名称
+
 def resource_path(relative_path):
     """获取资源文件的绝对路径，兼容开发和打包后的环境"""
     try:
@@ -74,6 +78,9 @@ class VersionSelectionDialog(QDialog):
 
 class SettingsInterface(BaseInterface):
     """设定界面"""
+    # 更新用的 GitHub 令牌
+    ComplicanceToolbox_Update_Token = "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"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_version = __version__
@@ -155,41 +162,6 @@ class SettingsInterface(BaseInterface):
         # 添加Stretch以使后续内容位于底部
         main_layout.addStretch()
 
-        # 创建 GitHub 按钮的水平布局
-        github_button_layout = QHBoxLayout()
-        github_button_layout.setAlignment(Qt.AlignLeft)
-
-        # 创建 GitHub 按钮
-        github_button = QPushButton("GitHub")
-        github_button.setFixedHeight(40)  # 增加按钮高度
-        github_button.setFixedWidth(120)  # 设置按钮宽度，不横跨整个界面
-        # 设置按钮字体为加粗
-        github_font = QFont()
-        github_font.setBold(True)
-        github_button.setFont(github_font)
-        # 设置 GitHub 图标
-        github_icon_path = resource_path(os.path.join('resources', 'githublogo.png'))
-        if os.path.exists(github_icon_path):
-            github_icon = QIcon(github_icon_path)
-            github_button.setIcon(github_icon)
-            github_button.setIconSize(QSize(24, 24))  # 调整图标大小为 24x24 像素
-        else:
-            # 如果图标未找到，保持文本显示并打印提示
-            github_button.setText("GitHub")
-            print(f"GitHub 图标未找到：{github_icon_path}")
-
-        # 移除自定义样式，使用默认样式
-        github_button.setStyleSheet("")
-
-        # 连接按钮点击信号到处理函数
-        github_button.clicked.connect(self.open_github_url)
-
-        # 将按钮添加到水平布局
-        github_button_layout.addWidget(github_button)
-
-        # 将 GitHub 按钮布局添加到主布局
-        main_layout.addLayout(github_button_layout)
-
         # 创建开发者信息标签
         developer_label = QLabel("开发者：合规团队")
         developer_label.setAlignment(Qt.AlignLeft)
@@ -206,11 +178,6 @@ class SettingsInterface(BaseInterface):
 
         # 将主布局添加到 BaseInterface 的布局中
         self.layout.addLayout(main_layout)
-
-    def open_github_url(self):
-        github_url = QUrl("https://github.com/FredericMN/Game_ComplianceToolbox")
-        if not QDesktopServices.openUrl(github_url):
-            QMessageBox.warning(self, "无法打开链接", "无法在浏览器中打开 GitHub 链接。")
 
     def load_local_update_logs(self):
         try:
@@ -264,7 +231,7 @@ class SettingsInterface(BaseInterface):
     def report_progress(self, message):
         self.output_text_edit.append(message)
 
-    def on_update_check_finished(self, is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes):
+    def on_update_check_finished(self, is_new_version, latest_version, cpu_asset_id, cpu_asset_name, gpu_asset_id, gpu_asset_name, release_notes):
         """处理版本检测完成后的逻辑"""
         if is_new_version:
             # 使用自定义对话框让用户选择下载版本，并传递release_notes
@@ -274,10 +241,10 @@ class SettingsInterface(BaseInterface):
 
             self.selected_version = dialog.selected_version  # 存储用户选择的版本
 
-            if self.selected_version == 'cpu' and cpu_download_url:
-                self.start_download(cpu_download_url)
-            elif self.selected_version == 'gpu' and gpu_download_url:
-                self.start_download(gpu_download_url)
+            if self.selected_version == 'cpu' and cpu_asset_id:
+                self.start_download(asset_id=cpu_asset_id, asset_name=cpu_asset_name)
+            elif self.selected_version == 'gpu' and gpu_asset_id:
+                self.start_download(asset_id=gpu_asset_id, asset_name=gpu_asset_name)
             else:
                 self.output_text_edit.append("用户取消了更新。")
         elif latest_version:
@@ -288,7 +255,7 @@ class SettingsInterface(BaseInterface):
             QMessageBox.warning(self, "更新失败", "无法获取最新版本信息。")
         self.check_update_button.setEnabled(True)
 
-    def start_download(self, download_url):
+    def start_download(self, asset_id, asset_name):
         """开始下载指定的版本"""
         if self.download_thread and self.download_thread.isRunning():
             self.download_thread.quit()
@@ -301,22 +268,25 @@ class SettingsInterface(BaseInterface):
         self.check_update_button.setEnabled(False)  # 禁用“检查版本更新”按钮
 
         self.download_thread = QThread()
-        self.download_worker = DownloadWorker(download_url)
+        self.download_worker = DownloadWorker(
+            asset_id=asset_id,
+            owner=OWNER,
+            repo=REPO,
+            token=self.ComplicanceToolbox_Update_Token
+        )
         self.download_worker.moveToThread(self.download_thread)
 
         self.download_thread.started.connect(self.download_worker.run)
         self.download_worker.progress.connect(self.report_download_progress)
-        self.download_worker.finished.connect(self.on_download_finished)
+        self.download_worker.finished.connect(lambda success, path: self.on_download_finished(success, path))
         self.download_worker.finished.connect(self.download_worker.deleteLater)
         self.download_thread.finished.connect(self.download_thread.deleteLater)
 
         self.download_thread.start()
 
-    def report_download_progress(self, percent, message=None):
-        """更新下载进度条和信息输出"""
+    def report_download_progress(self, percent):
+        """仅更新下载进度条"""
         self.download_progress_bar.setValue(percent)
-        if message:
-            self.output_text_edit.append(message)
 
     def on_download_finished(self, success, file_path):
         self.download_progress_bar.setVisible(False)
@@ -332,6 +302,6 @@ class SettingsInterface(BaseInterface):
             download_folder = os.path.dirname(file_path)
             QDesktopServices.openUrl(QUrl.fromLocalFile(download_folder))
         else:
-            self.output_text_edit.append("下载失败，请检查网络连接或文件写入权限。")
-            QMessageBox.warning(self, "下载失败", "下载最新版本时出错，请检查网络连接或文件写入权限。")
+            self.output_text_edit.append(f"下载失败：{file_path}")
+            QMessageBox.warning(self, "下载失败", f"下载最新版本时出错：{file_path}\n请检查网络连接或文件写入权限。")
         self.check_update_button.setEnabled(True)
