@@ -2,14 +2,14 @@
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtWidgets import (
-    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy, QComboBox, QHBoxLayout, QListWidget, QListWidgetItem
+    QLabel, QVBoxLayout, QTextEdit, QMessageBox, QFileDialog, QProgressBar, QWidget, QSizePolicy, QComboBox, QHBoxLayout, QListWidget, QListWidgetItem, QLineEdit, QGroupBox, QPushButton
 )
 from .base_interface import BaseInterface
 from qfluentwidgets import PrimaryPushButton
 from utils.large_model import (
     check_and_download_model, analyze_files_with_model, check_model_configured
 )
-from PySide6.QtGui import QTextCursor  # 导入 QTextCursor 类
+from PySide6.QtGui import QTextCursor, QDoubleValidator  # 导入 QTextCursor 和 QDoubleValidator
 import torch  # 导入torch库
 import os
 
@@ -58,15 +58,18 @@ class AnalyzeFilesWorker(QObject):
     progress_percent = Signal(int)
     finished = Signal(bool, list)  # success, list of result_dicts
 
-    def __init__(self, file_paths, device='cpu'):
+    def __init__(self, file_paths, device='cpu', normal_threshold=0.8, other_threshold=0.01):
         super().__init__()
         self.file_paths = file_paths
         self.device = device  # 添加设备属性
+        self.normal_threshold = normal_threshold
+        self.other_threshold = other_threshold
 
     def run(self):
         try:
             results = analyze_files_with_model(
-                self.file_paths, self.emit_progress, self.device)
+                self.file_paths, self.emit_progress, self.device,
+                self.normal_threshold, self.other_threshold)
             self.finished.emit(True, results)
         except Exception as e:
             self.progress.emit(f"分析过程中发生错误：{str(e)}")
@@ -139,6 +142,36 @@ class LargeModelInterface(BaseInterface):
 
         # 下部区域：选择文件并分析
         bottom_layout = QVBoxLayout()
+
+        # 新增折叠栏
+        self.threshold_group_box = QGroupBox("设置阈值(如非特殊需求，建议保持默认)")
+        self.threshold_group_box.setCheckable(True)
+        self.threshold_group_box.setChecked(False)
+        threshold_layout = QHBoxLayout()
+
+        # NORMAL_THRESHOLD 输入框
+        normal_label = QLabel("正常阈值 (0-1):")
+        self.normal_input = QLineEdit("0.95")
+        self.normal_input.setValidator(QDoubleValidator(0.00, 1.00, 2))
+        self.normal_input.setFixedWidth(60)
+
+        # OTHER_THRESHOLD 输入框
+        other_label = QLabel("其他阈值 (0-1):")
+        self.other_input = QLineEdit("0.50")
+        self.other_input.setValidator(QDoubleValidator(0.00, 1.00, 2))
+        self.other_input.setFixedWidth(60)
+
+        threshold_layout.addWidget(normal_label)
+        threshold_layout.addWidget(self.normal_input)
+        threshold_layout.addWidget(other_label)
+        threshold_layout.addWidget(self.other_input)
+        threshold_layout.addStretch()
+
+        self.threshold_group_box.setLayout(threshold_layout)
+
+        # 添加折叠栏到下部布局
+        bottom_layout.addWidget(self.threshold_group_box)
+
         self.analyze_button = PrimaryPushButton("选择文件并检测")
         self.analyze_button.clicked.connect(self.handle_analyze)
 
@@ -152,11 +185,11 @@ class LargeModelInterface(BaseInterface):
         # 添加说明标签
         explanation_label = QLabel(
             "说明：仅支持Word文档与Excel表格进行分析。\n"
-            "分类标签及颜色标记如下："
-            "• 正常（无标记）"
-            "• 低俗（绿色）"
-            "• 色情（黄色）"
-            "• 其他风险（红色）"
+            "分类标签及颜色标记如下：\n"
+            "• 正常（无标记）\n"
+            "• 低俗（绿色）\n"
+            "• 色情（黄色）\n"
+            "• 其他风险（红色）\n"
             "• 成人（蓝色）"
         )
 
@@ -254,6 +287,21 @@ class LargeModelInterface(BaseInterface):
             QMessageBox.warning(self, "提示", "大模型尚未配置，请先下载并配置大模型。")
             return
 
+        # 获取阈值输入
+        normal_threshold_text = self.normal_input.text()
+        other_threshold_text = self.other_input.text()
+
+        try:
+            normal_threshold = float(normal_threshold_text) if normal_threshold_text else 0.95
+            other_threshold = float(other_threshold_text) if other_threshold_text else 0.5
+
+            # 确保阈值在0-1之间
+            if not (0.0 <= normal_threshold <= 1.0) or not (0.0 <= other_threshold <= 1.0):
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "输入错误", "阈值必须是0到1之间的数字，最多两位小数。")
+            return
+
         # 打开文件选择对话框
         file_dialog = QFileDialog(self)
         file_dialog.setWindowTitle("选择文件")
@@ -273,7 +321,11 @@ class LargeModelInterface(BaseInterface):
 
                 # 启动分析线程
                 self.analysis_thread = QThread()
-                self.analysis_worker = AnalyzeFilesWorker(selected_files, device=self.device)  # 传递设备信息
+                self.analysis_worker = AnalyzeFilesWorker(
+                    selected_files, device=self.device,
+                    normal_threshold=normal_threshold,
+                    other_threshold=other_threshold
+                )  # 传递设备信息和阈值
                 self.analysis_worker.moveToThread(self.analysis_thread)
 
                 # 连接信号
@@ -306,7 +358,7 @@ class LargeModelInterface(BaseInterface):
                 current_item = self.analysis_progress_list_widget.currentItem()
                 if current_item:
                     current_item.setText(message)
-            elif message.startswith("分析进度"):
+            elif message.startswith("进度"):
                 # 可以选择不更新，或者仅更新进度条
                 pass
             else:

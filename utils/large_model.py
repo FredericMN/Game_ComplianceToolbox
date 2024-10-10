@@ -96,18 +96,23 @@ def load_classifier(device='cpu'):
         model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         model = AutoModelForSequenceClassification.from_pretrained(model_dir)
-        _cached_classifier = pipeline('text-classification', model=model, tokenizer=tokenizer, device=0 if device == 'cuda' else -1, max_length=128)
+        _cached_classifier = pipeline(
+            'text-classification',
+            model=model,
+            tokenizer=tokenizer,
+            device=0 if device == 'cuda' else -1,
+            max_length=128,
+            top_k=None,  # 使用 top_k=None 代替 return_all_scores=True
+            truncation=True  # 显式启用文本长度截断
+        )
     return _cached_classifier
 
 
-def analyze_files_with_model(file_paths, progress_callback, device='cpu'):
+def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal_threshold=0.95, other_threshold=0.5):
     """
     使用大模型分析多个文件内容，并根据风险等级进行标记。
     支持 .docx 和 .xlsx 文件。
     返回分析结果的列表，每个元素对应一个文件的统计信息。
-    优化点：
-    - 预先计算总处理项数
-    - 全局进度跟踪
     """
     # 检查模型是否已配置
     if not check_model_configured():
@@ -163,7 +168,8 @@ def analyze_files_with_model(file_paths, progress_callback, device='cpu'):
             progress_callback(f"开始分析文件 {file_idx}/{len(file_paths)}: {os.path.basename(file_path)}")
             # 分析单个文件
             file_result = analyze_single_file_with_model(
-                file_path, classifier, progress_callback, global_progress, total_items)
+                file_path, classifier, progress_callback, global_progress, total_items,
+                normal_threshold, other_threshold)
             result.update(file_result)
             results.append(result)
             progress_callback(f"完成分析文件 {file_idx}/{len(file_paths)}: {os.path.basename(file_path)}\n")
@@ -175,14 +181,11 @@ def analyze_files_with_model(file_paths, progress_callback, device='cpu'):
     return results
 
 
-def analyze_single_file_with_model(file_path, classifier, progress_callback, global_progress, total_items):
+def analyze_single_file_with_model(file_path, classifier, progress_callback, global_progress, total_items, normal_threshold, other_threshold):
     """
     使用大模型分析单个文件内容，并根据风险等级进行标记。
     支持 .docx 和 .xlsx 文件。
     返回分析结果的统计信息。
-    优化点：
-    - 批量处理文本，提高分类效率。
-    - 细粒度全局进度更新
     """
     # 初始化统计信息
     total_word_count = 0
@@ -208,7 +211,22 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
             batch_texts = texts[i:i + batch_size]
             try:
                 results_batch = classifier(batch_texts)
-                labels.extend([res['label'] for res in results_batch])
+                for res in results_batch:
+                    # 查找“正常”类别的分数
+                    normal_score = next((item['score'] for item in res if item['label'] == "正常"), 0)
+                    if normal_score >= normal_threshold:
+                        labels.append("正常")
+                    else:
+                        # 获取其他类别中分数最高的类别
+                        other_scores = [item for item in res if item['label'] != "正常"]
+                        if not other_scores:
+                            labels.append("其他风险")
+                            continue
+                        max_other = max(other_scores, key=lambda x: x['score'])
+                        if max_other['score'] >= other_threshold:
+                            labels.append(max_other['label'])
+                        else:
+                            labels.append("其他风险")
             except Exception as e:
                 progress_callback(f"批量分析段落 {i + 1} - {i + len(batch_texts)} 时发生错误：{e}")
                 labels.extend(["未知"] * len(batch_texts))  # 标记为未知
@@ -266,7 +284,22 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
                 batch_texts = texts[i:i + batch_size]
                 try:
                     results_batch = classifier(batch_texts)
-                    labels.extend([res['label'] for res in results_batch])
+                    for res in results_batch:
+                        # 查找“正常”类别的分数
+                        normal_score = next((item['score'] for item in res if item['label'] == "正常"), 0)
+                        if normal_score >= normal_threshold:
+                            labels.append("正常")
+                        else:
+                            # 获取其他类别中分数最高的类别
+                            other_scores = [item for item in res if item['label'] != "正常"]
+                            if not other_scores:
+                                labels.append("其他风险")
+                                continue
+                            max_other = max(other_scores, key=lambda x: x['score'])
+                            if max_other['score'] >= other_threshold:
+                                labels.append(max_other['label'])
+                            else:
+                                labels.append("其他风险")
                 except Exception as e:
                     progress_callback(f"批量分析单元格 {i + 1} - {i + len(batch_texts)} 时发生错误：{e}")
                     labels.extend(["未知"] * len(batch_texts))  # 标记为未知
