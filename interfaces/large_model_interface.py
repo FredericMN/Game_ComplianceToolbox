@@ -151,7 +151,7 @@ class LargeModelInterface(BaseInterface):
 
         # NORMAL_THRESHOLD 输入框
         normal_label = QLabel("正常阈值 (0-1):")
-        self.normal_input = QLineEdit("0.8")
+        self.normal_input = QLineEdit("0.65")
         self.normal_input.setValidator(QDoubleValidator(0.00, 1.00, 2))
         self.normal_input.setFixedWidth(60)
 
@@ -292,8 +292,8 @@ class LargeModelInterface(BaseInterface):
         other_threshold_text = self.other_input.text()
 
         try:
-            normal_threshold = float(normal_threshold_text) if normal_threshold_text else 0.95
-            other_threshold = float(other_threshold_text) if other_threshold_text else 0.5
+            normal_threshold = float(normal_threshold_text) if normal_threshold_text else 0.65
+            other_threshold = float(other_threshold_text) if other_threshold_text else 0.1
 
             # 确保阈值在0-1之间
             if not (0.0 <= normal_threshold <= 1.0) or not (0.0 <= other_threshold <= 1.0):
