@@ -5,15 +5,10 @@ from utils.version import __version__
 from PySide6.QtCore import QObject, Signal
 import os
 import threading
-import cgi  # 引入 cgi 模块用于解析 Content-Disposition
 
-# GitHub 相关配置
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 OWNER = "FredericMN"  # 替换为你的 GitHub 用户名
 REPO = "Game_ComplianceToolbox"  # 替换为你的仓库名称
-
-# 更新用的 GitHub 令牌
-ComplicanceToolbox_Update_Token = "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"
 
 class VersionChecker:
     def __init__(self):
@@ -24,11 +19,8 @@ class VersionChecker:
 
     def check_latest_version(self):
         url = GITHUB_API_URL.format(owner=OWNER, repo=REPO)
-        headers = {
-            "Authorization": f"token {ComplicanceToolbox_Update_Token}"
-        }
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 self.latest_version = data['tag_name'].lstrip('v')  # 去除 'v' 前缀
@@ -62,24 +54,20 @@ class VersionChecker:
                 return -1
         return 0
 
-    def get_download_asset_ids_and_names(self):
-        """获取标准版和CUDA版的资产ID及名称"""
-        cpu_asset_id = None
-        cpu_asset_name = None
-        gpu_asset_id = None
-        gpu_asset_name = None
+    def get_download_urls(self):
+        """获取标准版和CUDA版的下载链接"""
+        cpu_url = None
+        gpu_url = None
         for asset in self.assets:
             if asset['name'] == "ComplianceToolbox_standard.zip":
-                cpu_asset_id = asset['id']
-                cpu_asset_name = asset['name']
+                cpu_url = asset['browser_download_url']
             elif asset['name'] == "ComplianceToolbox_cuda.7z":
-                gpu_asset_id = asset['id']
-                gpu_asset_name = asset['name']
-        return cpu_asset_id, cpu_asset_name, gpu_asset_id, gpu_asset_name
+                gpu_url = asset['browser_download_url']
+        return cpu_url, gpu_url
 
 class VersionCheckWorker(QObject):
     progress = Signal(str)
-    finished = Signal(bool, str, int, str, int, str, str)  # is_new_version, latest_version, cpu_asset_id, cpu_asset_name, gpu_asset_id, gpu_asset_name, release_notes
+    finished = Signal(bool, str, str, str, str)  # is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes
 
     def __init__(self, version_checker: VersionChecker):
         super().__init__()
@@ -90,60 +78,37 @@ class VersionCheckWorker(QObject):
             self.progress.emit("正在获取最新版本信息...")
             self.version_checker.check_latest_version()
             if self.version_checker.is_new_version_available():
-                cpu_asset_id, cpu_asset_name, gpu_asset_id, gpu_asset_name = self.version_checker.get_download_asset_ids_and_names()
-                if not cpu_asset_id and not gpu_asset_id:
+                cpu_url, gpu_url = self.version_checker.get_download_urls()
+                if not cpu_url and not gpu_url:
                     self.progress.emit("未找到可用的更新文件。")
-                    self.finished.emit(False, None, None, None, None, None, None)
+                    self.finished.emit(False, None, None, None, None)
                     return
                 self.progress.emit(f"发现新版本：{self.version_checker.latest_version}")
-                self.finished.emit(True, self.version_checker.latest_version, cpu_asset_id, cpu_asset_name, gpu_asset_id, gpu_asset_name, self.version_checker.release_notes)
+                self.finished.emit(True, self.version_checker.latest_version, cpu_url, gpu_url, self.version_checker.release_notes)
             else:
-                self.finished.emit(False, self.version_checker.latest_version, None, None, None, None, None)
+                self.finished.emit(False, self.version_checker.latest_version, None, None, None)
         except Exception as e:
             self.progress.emit(f"检查更新失败: {str(e)}")
-            self.finished.emit(False, None, None, None, None, None, None)
+            self.finished.emit(False, None, None, None, None)
 
 class DownloadWorker(QObject):
-    progress = Signal(int)  # percent
+    progress = Signal(int, str)  # percent, message
     finished = Signal(bool, str)  # success, file_path
 
-    def __init__(self, asset_id, owner, repo, token):
+    def __init__(self, download_url):
         super().__init__()
-        self.asset_id = asset_id
-        self.owner = owner
-        self.repo = repo
-        self.token = token
+        self.download_url = download_url
 
     def run(self):
         try:
-            download_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases/assets/{self.asset_id}"
-            headers = {
-                "Authorization": f"token {self.token}",
-                "Accept": "application/octet-stream"
-            }
-            response = requests.get(download_url, headers=headers, stream=True, timeout=30, allow_redirects=True)
-
-            if response.status_code != 200:
-                self.progress.emit(0)
-                self.finished.emit(False, f"下载失败，状态码: {response.status_code}")
-                return
-
+            response = requests.get(self.download_url, stream=True, timeout=30)
             total_length = response.headers.get('content-length')
             if total_length is None:
-                self.progress.emit(0)
-                self.finished.emit(False, "无法获取文件大小。")
+                self.progress.emit(0, "无法获取文件大小。")
+                self.finished.emit(False, None)
                 return
             total_length = int(total_length)
-
-            # 从 Content-Disposition 头中提取文件名
-            content_disposition = response.headers.get('Content-Disposition')
-            if content_disposition:
-                value, params = cgi.parse_header(content_disposition)
-                filename = params.get('filename') or params.get('filename*')
-                if not filename:
-                    filename = f"downloaded_asset_{self.asset_id}"
-            else:
-                filename = f"downloaded_asset_{self.asset_id}"
+            filename = os.path.basename(self.download_url)
             save_path = os.path.join(os.getcwd(), filename)
             with open(save_path, 'wb') as f:
                 downloaded = 0
@@ -152,14 +117,14 @@ class DownloadWorker(QObject):
                         f.write(data)
                         downloaded += len(data)
                         percent = int(downloaded * 100 / total_length)
-                        self.progress.emit(percent)
+                        self.progress.emit(percent, f"下载进度：{percent}%")
             self.finished.emit(True, save_path)
         except requests.RequestException as e:
-            self.progress.emit(0)
-            self.finished.emit(False, f"下载失败：{str(e)}")
+            self.progress.emit(0, f"下载失败：{str(e)}")
+            self.finished.emit(False, None)
         except PermissionError:
-            self.progress.emit(0)
-            self.finished.emit(False, "文件写入权限不足。")
+            self.progress.emit(0, "文件写入权限不足。")
+            self.finished.emit(False, None)
         except Exception as e:
-            self.progress.emit(0)
-            self.finished.emit(False, f"下载过程中发生错误：{str(e)}")
+            self.progress.emit(0, f"下载过程中发生错误：{str(e)}")
+            self.finished.emit(False, None)
