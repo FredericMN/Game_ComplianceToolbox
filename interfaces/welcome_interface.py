@@ -1,7 +1,11 @@
 # welcome_interface.py
 
+import os
+import sys
+import json
+from datetime import datetime
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
-from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QStandardPaths
 from .base_interface import BaseInterface
 from PySide6.QtGui import QFont
 from utils.environment_checker import EnvironmentChecker
@@ -14,7 +18,57 @@ class WelcomeInterface(BaseInterface):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.init_ui()  # 添加这行，初始化 UI
+        self.env_result_file = self.get_env_result_file_path()
+        self.init_ui()  # 初始化 UI
+        self.check_env_status()  # 检查环境状态
+
+    def get_env_result_file_path(self):
+        """获取环境检测结果文件的绝对路径"""
+        # 尝试使用 QStandardPaths 获取标准配置目录
+        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        if not config_dir:
+            # 如果无法获取配置目录，退回到当前文件所在目录
+            config_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 确定当前运行的版本名称
+        executable_name = os.path.basename(sys.argv[0]).lower()
+        if 'cuda' in executable_name:
+            version_suffix = 'cuda'
+        else:
+            version_suffix = 'standard'
+        
+        # 设置应用程序特定的目录
+        app_specific_dir = os.path.join(config_dir, f"ComplianceToolbox_{version_suffix}")
+        if not os.path.exists(app_specific_dir):
+            os.makedirs(app_specific_dir)
+        
+        # 返回环境检测结果文件的路径
+        return os.path.join(app_specific_dir, 'env_check_result.json')
+
+    def check_env_status(self):
+        """检查是否已记录环境检测结果"""
+        if os.path.exists(self.env_result_file):
+            try:
+                with open(self.env_result_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                date_str = data.get('date')
+                result = data.get('result')
+                if date_str and (result is not None):
+                    if result:
+                        message = f"{date_str} 检测运行环境为通过，可直接使用，如遇问题可再次检测！"
+                    else:
+                        message = f"{date_str} 检测运行环境为不通过，建议再次检测或获取帮助！"
+                    self.output_text_edit.append(message)
+                else:
+                    # 如果文件内容不完整，重新进行检测
+                    self.run_environment_check()
+            except Exception as e:
+                # 如果读取文件出错，重新进行检测
+                self.output_text_edit.append(f"读取检测结果失败，重新检测。错误信息：{str(e)}")
+                self.run_environment_check()
+        else:
+            # 如果文件不存在，进行环境检测
+            self.run_environment_check()
 
     def init_ui(self):
         # 主垂直布局
@@ -170,13 +224,33 @@ class WelcomeInterface(BaseInterface):
         self.overlay.hide()
         # Emit signal that environment check is finished, passing whether there were errors
         self.environment_check_finished.emit(has_errors)
+        # 获取当前日期
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        # 记录结果到文件
+        self.record_env_check_result(current_date, not has_errors)
         # 根据检测结果给出提示
         if has_errors:
+            message = f"{current_date} 检测运行环境为不通过，建议再次检测或获取帮助！"
             self.append_output("环境检测过程中存在问题，请根据提示进行处理。")
         else:
+            message = f"{current_date} 检测运行环境为通过，可直接使用，如遇问题可再次检测！"
             self.append_output("恭喜，环境检测和配置完成！")
+        # 在信息输出区域显示提示
+        self.output_text_edit.append(message)
         # 线程清理
         self.thread.quit()
         self.thread.wait()
         self.thread = None
         self.environment_checker = None
+
+    def record_env_check_result(self, date_str, result):
+        """记录环境检测结果到文件"""
+        data = {
+            "date": date_str,
+            "result": result  # True 表示通过，False 表示不通过
+        }
+        try:
+            with open(self.env_result_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            self.append_output(f"记录环境检测结果失败：{str(e)}")

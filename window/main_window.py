@@ -72,7 +72,7 @@ class MainWindow(FramelessWindow):
         self.welcomeInterface.environment_check_finished.connect(self.on_environment_check_finished)
 
         # 启动环境检测
-        self.welcomeInterface.run_environment_check()
+        # self.welcomeInterface.run_environment_check()
 
     def init_layout(self):
         self.hBoxLayout.setSpacing(0)
