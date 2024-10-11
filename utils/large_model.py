@@ -110,7 +110,7 @@ def load_classifier(device='cpu'):
     return _cached_classifier
 
 
-def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal_threshold=0.95, other_threshold=0.5):
+def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal_threshold=0.65, other_threshold=0.1):
     """
     使用大模型分析多个文件内容，并根据风险等级进行标记。
     支持 .docx 和 .xlsx 文件。
