@@ -204,6 +204,7 @@ class LargeModelInterface(BaseInterface):
         # 下部布局内容
         bottom_layout.addWidget(self.analyze_button)
         bottom_layout.addWidget(self.analysis_progress_bar)
+        self.analysis_progress_list_widget.setSelectionMode(QListWidget.NoSelection)
         bottom_layout.addWidget(self.analysis_progress_list_widget)
         bottom_layout.setStretch(0, 1)
         bottom_layout.setStretch(1, 1)

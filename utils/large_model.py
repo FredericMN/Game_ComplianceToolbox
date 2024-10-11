@@ -110,7 +110,7 @@ def load_classifier(device='cpu'):
     return _cached_classifier
 
 
-def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal_threshold=0.65, other_threshold=0.1):
+def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal_threshold=0.8, other_threshold=0.1):
     """
     使用大模型分析多个文件内容，并根据风险等级进行标记。
     支持 .docx 和 .xlsx 文件。
@@ -234,7 +234,7 @@ def merge_texts(texts, min_length=60):
     return merged
 
 
-def analyze_single_file_with_model(file_path, classifier, progress_callback, global_progress, total_items, normal_threshold, other_threshold):
+def analyze_single_file_with_model(file_path, classifier, progress_callback, global_progress, total_items, normal_threshold, other_threshold, batch_size=32):
     """
     使用大模型分析单个文件内容，并根据风险等级进行标记。
     支持 .docx 和 .xlsx 文件。
@@ -274,78 +274,71 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
             merged_texts_with_sources = merge_texts_with_sources(combined_texts, sources, min_length=60)
             progress_callback(f"文件 {file_path} 合并后共有 {len(merged_texts_with_sources)} 个文本组。")
 
-            for text_group, source_list in merged_texts_with_sources:
-                segments = []
-                if len(text_group) <= 128:
-                    segments = [text_group]
-                else:
-                    for i in range(0, len(text_group), 128):
-                        segment = text_group[i:i + 128]
-                        segments.append(segment)
+            # 准备批量推理
+            text_groups = [text_group for text_group, _ in merged_texts_with_sources]
+            sources_groups = [source_list for _, source_list in merged_texts_with_sources]
 
-                group_labels = []
-                for segment in segments:
-                    try:
-                        result = classifier(segment)[0]
-                        # 查找“正常”类别的分数
-                        normal_score = next((item['score'] for item in result if item['label'] == "正常"), 0)
-                        if normal_score >= normal_threshold:
-                            group_labels.append("正常")
-                        else:
-                            # 获取其他类别中分数最高的类别
-                            other_scores = [item for item in result if item['label'] != "正常"]
-                            if not other_scores:
-                                group_labels.append("其他风险")
-                                continue
-                            max_other = max(other_scores, key=lambda x: x['score'])
-                            if max_other['score'] >= other_threshold:
-                                group_labels.append(max_other['label'])
-                            else:
-                                group_labels.append("其他风险")
-                    except Exception as e:
-                        progress_callback(f"分析文本组时发生错误：{e}")
-                        group_labels.append("未知")
+            # 批量推理
+            batch_labels_per_group = []
+            for i in range(0, len(text_groups), batch_size):
+                batch_texts = text_groups[i:i + batch_size]
+                try:
+                    batch_results = classifier(batch_texts)
+                except Exception as e:
+                    progress_callback(f"批量分析文本组时发生错误：{e}")
+                    batch_results = [None] * len(batch_texts)  # 使用None表示分析失败
 
+                for j, result in enumerate(batch_results):
+                    if result is None:
+                        group_labels = ["未知"]
+                    else:
+                        # 根据每个文本的结果确定标签
+                        group_label = determine_label_from_result(result, normal_threshold, other_threshold)
+                        group_labels = [group_label]
+                    batch_labels_per_group.append(group_labels)
                     # 更新全局进度
                     global_progress['processed'] += 1
                     percent = int((global_progress['processed'] / total_items) * 100)
                     progress_callback(f"进度: {percent}%")
 
-                # 如果任何一个段落属于非正常，则标记整个文本组
-                if any(label != "正常" and label != "未知" for label in group_labels):
-                    # 选择第一个非正常标签作为组的标签
-                    group_label = next((label for label in group_labels if label != "正常" and label != "未知"), "其他风险")
-                    if group_label == "低俗":
-                        color = RGBColor(0, 255, 0)  # 绿色
-                        low_vulgar_count += 1
-                    elif group_label == "色情":
-                        color = RGBColor(255, 255, 0)  # 黄色
-                        porn_count += 1
-                    elif group_label == "其他风险":
-                        color = RGBColor(255, 0, 0)  # 红色
-                        other_risk_count += 1
-                    elif group_label == "成人":
-                        color = RGBColor(0, 0, 255)  # 蓝色
-                        adult_count += 1
-                    else:
-                        color = None  # 未知标签不做处理
+            # 应用标签和统计
+            for group_idx, (group_labels, source_list) in enumerate(zip(batch_labels_per_group, sources_groups)):
+                label = group_labels[0] if group_labels else "未知"
 
-                    if color:
-                        for source in source_list:
-                            if isinstance(source, Paragraph):
-                                # 段落对象
-                                for run in source.runs:
+                # 根据标签更新统计和标记
+                if label == "正常":
+                    normal_count += 1
+                elif label == "低俗":
+                    color = RGBColor(0, 255, 0)  # 绿色
+                    low_vulgar_count += 1
+                elif label == "色情":
+                    color = RGBColor(255, 255, 0)  # 黄色
+                    porn_count += 1
+                elif label == "其他风险":
+                    color = RGBColor(255, 0, 0)  # 红色
+                    other_risk_count += 1
+                elif label == "成人":
+                    color = RGBColor(0, 0, 255)  # 蓝色
+                    adult_count += 1
+                else:
+                    color = None  # 未知标签不做处理
+
+                if label != "正常" and label != "未知" and color:
+                    for source in source_list:
+                        if isinstance(source, Paragraph):
+                            # 段落对象
+                            for run in source.runs:
+                                run.font.color.rgb = color
+                        elif isinstance(source, _Cell):
+                            # Table cell 对象
+                            for paragraph in source.paragraphs:
+                                for run in paragraph.runs:
                                     run.font.color.rgb = color
-                            elif isinstance(source, _Cell):
-                                # Table cell 对象
-                                for paragraph in source.paragraphs:
-                                    for run in paragraph.runs:
-                                        run.font.color.rgb = color
                 else:
                     normal_count += 1
 
                 # 统计字数
-                total_word_count += len(text_group)
+                total_word_count += len(text_groups[group_idx])
 
             new_file_path = file_path.replace('.docx', '_analyzed.docx')
             doc.save(new_file_path)
@@ -394,32 +387,22 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
                         if not segments:
                             segments = [concatenated_text]
 
-                        # 批量分析每个段
-                        group_labels = []
-                        for segment in segments:
-                            try:
-                                result = classifier(segment)[0]
-                                # 查找“正常”类别的分数
-                                normal_score = next((item['score'] for item in result if item['label'] == "正常"), 0)
-                                if normal_score >= normal_threshold:
-                                    group_labels.append("正常")
-                                else:
-                                    # 获取其他类别中分数最高的类别
-                                    other_scores = [item for item in result if item['label'] != "正常"]
-                                    if not other_scores:
-                                        group_labels.append("其他风险")
-                                        continue
-                                    max_other = max(other_scores, key=lambda x: x['score'])
-                                    if max_other['score'] >= other_threshold:
-                                        group_labels.append(max_other['label'])
-                                    else:
-                                        group_labels.append("其他风险")
-                            except Exception as e:
-                                progress_callback(f"分析单元格组 {i + 1} - {i + len(group_cells)} 时发生错误：{e}")
-                                group_labels.append("未知")
+                        # 批量推理
+                        try:
+                            batch_results = classifier(segments)
+                        except Exception as e:
+                            progress_callback(f"批量分析单元格组时发生错误：{e}")
+                            batch_results = [None] * len(segments)  # 使用None表示分析失败
 
+                        group_labels = []
+                        for result in batch_results:
+                            if result is None:
+                                group_labels.append("未知")
+                            else:
+                                group_label = determine_label_from_result(result, normal_threshold, other_threshold)
+                                group_labels.append(group_label)
                             # 更新全局进度
-                            global_progress['processed'] += 1  # 每个段算作一个处理项
+                            global_progress['processed'] += 1
                             percent = int((global_progress['processed'] / total_items) * 100)
                             progress_callback(f"进度: {percent}%")
 
@@ -453,7 +436,6 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
                             if fill:
                                 for cell in group_cells:
                                     cell.fill = fill
-
                         else:
                             normal_count += len(group_cells)
 
@@ -491,6 +473,26 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
     }
 
     return result
+
+
+def determine_label_from_result(result, normal_threshold, other_threshold):
+    """
+    根据模型输出结果和阈值，确定文本组的标签。
+    """
+    # 查找“正常”类别的分数
+    normal_score = next((item['score'] for item in result if item['label'] == "正常"), 0)
+    if normal_score >= normal_threshold:
+        return "正常"
+    else:
+        # 获取其他类别中分数最高的类别
+        other_scores = [item for item in result if item['label'] != "正常"]
+        if not other_scores:
+            return "其他风险"
+        max_other = max(other_scores, key=lambda x: x['score'])
+        if max_other['score'] >= other_threshold:
+            return max_other['label']
+        else:
+            return "其他风险"
 
 
 def merge_texts_with_sources(texts, sources, min_length=60):
