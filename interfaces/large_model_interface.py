@@ -359,11 +359,12 @@ class LargeModelInterface(BaseInterface):
                 if current_item:
                     current_item.setText(message)
             elif message.startswith("进度"):
-                # 可以选择不更新，或者仅更新进度条
+                # 仅更新进度条
                 pass
             else:
                 # 其他消息可以选择性显示
-                pass
+                self.analysis_progress_list_widget.addItem(QListWidgetItem(message))
+                self.analysis_progress_list_widget.scrollToBottom()
 
     def on_analysis_finished(self, success, results):
         """
@@ -372,19 +373,20 @@ class LargeModelInterface(BaseInterface):
         """
         if success:
             for result in results:
-                output_text = (
-                    f"文件: {os.path.basename(result['file_path'])}\n"
-                    f"文字总字数: {result['total_word_count']}。\n"
-                    f"分析结果：\n"
-                    f"正常内容 {result['normal_count']} 段，"
-                    f"低俗内容 {result['low_vulgar_count']} 段，"
-                    f"色情内容 {result['porn_count']} 段，"
-                    f"其他风险内容 {result['other_risk_count']} 段，"
-                    f"成人内容 {result['adult_count']} 段。\n"
-                    f"已保存标记后的副本：{result['new_file_path']}\n"
-                )
-                list_item = QListWidgetItem(output_text)
-                self.analysis_progress_list_widget.addItem(list_item)
+                if result['new_file_path']:  # 仅显示成功处理的文件
+                    output_text = (
+                        f"文件: {os.path.basename(result['file_path'])}\n"
+                        f"文字总字数: {result['total_word_count']}。\n"
+                        f"分析结果：\n"
+                        f"正常内容 {result['normal_count']} 段，"
+                        f"低俗内容 {result['low_vulgar_count']} 段，"
+                        f"色情内容 {result['porn_count']} 段，"
+                        f"其他风险内容 {result['other_risk_count']} 段，"
+                        f"成人内容 {result['adult_count']} 段。\n"
+                        f"已保存标记后的副本：{result['new_file_path']}\n"
+                    )
+                    list_item = QListWidgetItem(output_text)
+                    self.analysis_progress_list_widget.addItem(list_item)
             QMessageBox.information(self, "完成", "所有文件分析完成！结果已保存。")
         else:
             QMessageBox.warning(self, "错误", "分析过程中发生错误，请查看输出信息。")

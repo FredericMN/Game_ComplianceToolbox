@@ -5,6 +5,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipe
 from huggingface_hub import HfApi
 from docx import Document
 from docx.shared import RGBColor
+from docx.text.paragraph import Paragraph  # 导入 Paragraph 类
+from docx.table import _Cell  # 导入 Cell 类
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 import requests
@@ -133,22 +135,49 @@ def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal
     for file_path in file_paths:
         file_type = file_path.split('.')[-1].lower()
         if file_type == 'docx':
-            doc = Document(file_path)
-            paragraphs = [para for para in doc.paragraphs if para.text.strip()]
-            items = len(paragraphs)
+            try:
+                doc = Document(file_path)
+                paragraphs = [para.text.strip() for para in doc.paragraphs if para.text.strip()]
+                tables = [cell.text.strip() for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
+                combined_texts = paragraphs + tables
+                if not combined_texts:
+                    progress_callback(f"文件 {file_path} 中未找到任何可处理的段落或表格内容。")
+                # 计算合并后的文本组数
+                merged_texts = merge_texts(combined_texts, min_length=60)
+                progress_callback(f"文件 {file_path} 共有 {len(paragraphs)} 个非空段落，{len(tables)} 个表格单元格，总合并后为 {len(merged_texts)} 个组。")
+                items = len(merged_texts)
+            except Exception as e:
+                progress_callback(f"处理 Word 文件 {file_path} 时发生错误：{e}")
+                items = 0
         elif file_type == 'xlsx':
-            wb = load_workbook(file_path, read_only=True)
-            cells = [cell for sheet in wb.worksheets for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row) for cell in row if cell.value]
-            items = len(cells)
+            try:
+                # 移除 read_only=True 以允许修改单元格样式
+                wb = load_workbook(file_path)
+                group_count = 0
+                for sheet in wb.worksheets:
+                    columns = sheet.iter_cols(min_row=1, max_row=sheet.max_row, values_only=False)
+                    for col in columns:
+                        # 提取有值的单元格
+                        cells = [cell for cell in col if cell.value]
+                        if not cells:
+                            continue
+                        # 计算组数，每5个单元格为一组
+                        group_count += (len(cells) + 4) // 5
+                progress_callback(f"文件 {file_path} 共有 {group_count} 个单元格组。")
+                items = group_count
+            except Exception as e:
+                progress_callback(f"处理 Excel 文件 {file_path} 时发生错误：{e}")
+                items = 0
         else:
             items = 0  # Unsupported file type
+            progress_callback(f"文件 {file_path} 是不支持的类型，仅支持 .docx 和 .xlsx 文件。")
         items_per_file.append(items)
         total_items += items
 
     if total_items == 0:
         raise Exception("未找到任何可处理的段落或单元格。")
 
-    progress_callback(f"总共有 {total_items} 个待处理的段落或单元格。")
+    progress_callback(f"总共有 {total_items} 个待处理的段落或单元格组。")
 
     # 初始化全局进度跟踪
     global_progress = {'processed': 0}
@@ -181,6 +210,30 @@ def analyze_files_with_model(file_paths, progress_callback, device='cpu', normal
     return results
 
 
+def merge_texts(texts, min_length=60):
+    """
+    合并文本，直到合并后的文本长度达到最小长度。
+    返回一个文本字符串列表。
+    """
+    merged = []
+    current_group = ""
+    for text in texts:
+        if not text:
+            continue
+        if len(current_group) + len(text) + 1 <= min_length:
+            if current_group:
+                current_group += " " + text
+            else:
+                current_group = text
+        else:
+            if current_group:
+                merged.append(current_group)
+            current_group = text
+    if current_group:
+        merged.append(current_group)
+    return merged
+
+
 def analyze_single_file_with_model(file_path, classifier, progress_callback, global_progress, total_items, normal_threshold, other_threshold):
     """
     使用大模型分析单个文件内容，并根据风险等级进行标记。
@@ -198,154 +251,233 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
     # 分析文件
     file_type = file_path.split('.')[-1].lower()
     if file_type == 'docx':
-        doc = Document(file_path)
-        paragraphs = [para for para in doc.paragraphs if para.text.strip()]
-        total_paragraphs = len(paragraphs)
-        texts = [para.text.strip() for para in paragraphs]
-        total_word_count = sum(len(text) for text in texts)
+        try:
+            doc = Document(file_path)
+            paragraphs = [para.text.strip() for para in doc.paragraphs if para.text.strip()]
+            tables = [cell.text.strip() for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
+            combined_texts = paragraphs + tables
+            sources = paragraphs + [cell for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
 
-        # 批量分类
-        batch_size = 32  # 根据需要调整批量大小
-        labels = []
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            try:
-                results_batch = classifier(batch_texts)
-                for res in results_batch:
-                    # 查找“正常”类别的分数
-                    normal_score = next((item['score'] for item in res if item['label'] == "正常"), 0)
-                    if normal_score >= normal_threshold:
-                        labels.append("正常")
-                    else:
-                        # 获取其他类别中分数最高的类别
-                        other_scores = [item for item in res if item['label'] != "正常"]
-                        if not other_scores:
-                            labels.append("其他风险")
-                            continue
-                        max_other = max(other_scores, key=lambda x: x['score'])
-                        if max_other['score'] >= other_threshold:
-                            labels.append(max_other['label'])
-                        else:
-                            labels.append("其他风险")
-            except Exception as e:
-                progress_callback(f"批量分析段落 {i + 1} - {i + len(batch_texts)} 时发生错误：{e}")
-                labels.extend(["未知"] * len(batch_texts))  # 标记为未知
+            if not combined_texts:
+                progress_callback(f"文件 {file_path} 中未找到任何可处理的段落或表格内容。")
+                return {
+                    'total_word_count': total_word_count,
+                    'normal_count': normal_count,
+                    'low_vulgar_count': low_vulgar_count,
+                    'porn_count': porn_count,
+                    'other_risk_count': other_risk_count,
+                    'adult_count': adult_count,
+                    'new_file_path': ''
+                }
 
-            # 更新全局进度
-            processed = len(batch_texts)
-            global_progress['processed'] += processed
-            percent = int((global_progress['processed'] / total_items) * 100)
-            progress_callback(f"进度: {percent}%")
+            # 合并文本并保留源对象
+            merged_texts_with_sources = merge_texts_with_sources(combined_texts, sources, min_length=60)
+            progress_callback(f"文件 {file_path} 合并后共有 {len(merged_texts_with_sources)} 个文本组。")
 
-        # 应用标签和标记
-        for para, label in zip(paragraphs, labels):
-            if label == "正常":
-                normal_count += 1
-                # 无标记
-            elif label == "低俗":
-                # 标记为绿色
-                for run in para.runs:
-                    run.font.color.rgb = RGBColor(0, 255, 0)  # 绿色
-                low_vulgar_count += 1
-            elif label == "色情":
-                # 标记为黄色
-                for run in para.runs:
-                    run.font.color.rgb = RGBColor(255, 255, 0)  # 黄色
-                porn_count += 1
-            elif label == "其他风险":
-                # 标记为红色
-                for run in para.runs:
-                    run.font.color.rgb = RGBColor(255, 0, 0)  # 红色
-                other_risk_count += 1
-            elif label == "成人":
-                # 标记为蓝色
-                for run in para.runs:
-                    run.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
-                adult_count += 1
-            else:
-                # 未知标签不做处理
-                pass
+            for text_group, source_list in merged_texts_with_sources:
+                segments = []
+                if len(text_group) <= 128:
+                    segments = [text_group]
+                else:
+                    for i in range(0, len(text_group), 128):
+                        segment = text_group[i:i + 128]
+                        segments.append(segment)
 
-        new_file_path = file_path.replace('.docx', '_analyzed.docx')
-        doc.save(new_file_path)
-
-    elif file_type == 'xlsx':
-        wb = load_workbook(file_path)
-        for sheet in wb.worksheets:
-            cells = [cell for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row) for cell in row if cell.value]
-            total_cells = len(cells)
-            texts = [str(cell.value).strip() for cell in cells]
-            total_word_count += sum(len(text) for text in texts)
-
-            # 批量分类
-            batch_size = 64  # 根据需要调整批量大小
-            labels = []
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i + batch_size]
-                try:
-                    results_batch = classifier(batch_texts)
-                    for res in results_batch:
+                group_labels = []
+                for segment in segments:
+                    try:
+                        result = classifier(segment)[0]
                         # 查找“正常”类别的分数
-                        normal_score = next((item['score'] for item in res if item['label'] == "正常"), 0)
+                        normal_score = next((item['score'] for item in result if item['label'] == "正常"), 0)
                         if normal_score >= normal_threshold:
-                            labels.append("正常")
+                            group_labels.append("正常")
                         else:
                             # 获取其他类别中分数最高的类别
-                            other_scores = [item for item in res if item['label'] != "正常"]
+                            other_scores = [item for item in result if item['label'] != "正常"]
                             if not other_scores:
-                                labels.append("其他风险")
+                                group_labels.append("其他风险")
                                 continue
                             max_other = max(other_scores, key=lambda x: x['score'])
                             if max_other['score'] >= other_threshold:
-                                labels.append(max_other['label'])
+                                group_labels.append(max_other['label'])
                             else:
-                                labels.append("其他风险")
-                except Exception as e:
-                    progress_callback(f"批量分析单元格 {i + 1} - {i + len(batch_texts)} 时发生错误：{e}")
-                    labels.extend(["未知"] * len(batch_texts))  # 标记为未知
+                                group_labels.append("其他风险")
+                    except Exception as e:
+                        progress_callback(f"分析文本组时发生错误：{e}")
+                        group_labels.append("未知")
 
-                # 更新全局进度
-                processed = len(batch_texts)
-                global_progress['processed'] += processed
-                percent = int((global_progress['processed'] / total_items) * 100)
-                progress_callback(f"进度: {percent}%")
+                    # 更新全局进度
+                    global_progress['processed'] += 1
+                    percent = int((global_progress['processed'] / total_items) * 100)
+                    progress_callback(f"进度: {percent}%")
 
-            # 应用标签和标记
-            for cell, label in zip(cells, labels):
-                if label == "正常":
-                    normal_count += 1
-                    # 无标记
-                elif label == "低俗":
-                    # 标记为绿色
-                    fill = PatternFill(start_color='00FF00', end_color='00FF00', fill_type='solid')  # 绿色
-                    cell.fill = fill
-                    low_vulgar_count += 1
-                elif label == "色情":
-                    # 标记为黄色
-                    fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')  # 黄色
-                    cell.fill = fill
-                    porn_count += 1
-                elif label == "其他风险":
-                    # 标记为红色
-                    fill = PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid')  # 红色
-                    cell.fill = fill
-                    other_risk_count += 1
-                elif label == "成人":
-                    # 标记为蓝色
-                    fill = PatternFill(start_color='0000FF', end_color='0000FF', fill_type='solid')  # 蓝色
-                    cell.fill = fill
-                    adult_count += 1
+                # 如果任何一个段落属于非正常，则标记整个文本组
+                if any(label != "正常" and label != "未知" for label in group_labels):
+                    # 选择第一个非正常标签作为组的标签
+                    group_label = next((label for label in group_labels if label != "正常" and label != "未知"), "其他风险")
+                    if group_label == "低俗":
+                        color = RGBColor(0, 255, 0)  # 绿色
+                        low_vulgar_count += 1
+                    elif group_label == "色情":
+                        color = RGBColor(255, 255, 0)  # 黄色
+                        porn_count += 1
+                    elif group_label == "其他风险":
+                        color = RGBColor(255, 0, 0)  # 红色
+                        other_risk_count += 1
+                    elif group_label == "成人":
+                        color = RGBColor(0, 0, 255)  # 蓝色
+                        adult_count += 1
+                    else:
+                        color = None  # 未知标签不做处理
+
+                    if color:
+                        for source in source_list:
+                            if isinstance(source, Paragraph):
+                                # 段落对象
+                                for run in source.runs:
+                                    run.font.color.rgb = color
+                            elif isinstance(source, _Cell):
+                                # Table cell 对象
+                                for paragraph in source.paragraphs:
+                                    for run in paragraph.runs:
+                                        run.font.color.rgb = color
                 else:
-                    # 未知标签不做处理
-                    pass
+                    normal_count += 1
 
-        new_file_path = file_path.replace('.xlsx', '_analyzed.xlsx')
-        wb.save(new_file_path)
+                # 统计字数
+                total_word_count += len(text_group)
+
+            new_file_path = file_path.replace('.docx', '_analyzed.docx')
+            doc.save(new_file_path)
+
+            # 更新结果
+            result = {
+                'total_word_count': total_word_count,
+                'normal_count': normal_count,
+                'low_vulgar_count': low_vulgar_count,
+                'porn_count': porn_count,
+                'other_risk_count': other_risk_count,
+                'adult_count': adult_count,
+                'new_file_path': new_file_path
+            }
+            return result
+
+        except Exception as e:
+            progress_callback(f"处理 Word 文档时发生错误：{e}")
+            raise
+
+    elif file_type == 'xlsx':
+        try:
+            wb = load_workbook(file_path)
+            for sheet in wb.worksheets:
+                columns = sheet.iter_cols(min_row=1, max_row=sheet.max_row, values_only=False)
+                for col in columns:
+                    # 提取有值的单元格
+                    cells = [cell for cell in col if cell.value]
+                    if not cells:
+                        continue
+
+                    # 按每五个单元格分组
+                    for i in range(0, len(cells), 5):
+                        group_cells = cells[i:i + 5]
+                        group_texts = [str(cell.value).strip() for cell in group_cells]
+                        concatenated_text = ''.join(group_texts)
+                        total_word_count += len(concatenated_text)
+
+                        # 分段处理，如果超过128个字符
+                        segments = []
+                        for j in range(0, len(concatenated_text), 128):
+                            segment = concatenated_text[j:j + 128]
+                            segments.append(segment)
+
+                        # 如果没有分段（即总长度 <= 128），仍然需要进行分析
+                        if not segments:
+                            segments = [concatenated_text]
+
+                        # 批量分析每个段
+                        group_labels = []
+                        for segment in segments:
+                            try:
+                                result = classifier(segment)[0]
+                                # 查找“正常”类别的分数
+                                normal_score = next((item['score'] for item in result if item['label'] == "正常"), 0)
+                                if normal_score >= normal_threshold:
+                                    group_labels.append("正常")
+                                else:
+                                    # 获取其他类别中分数最高的类别
+                                    other_scores = [item for item in result if item['label'] != "正常"]
+                                    if not other_scores:
+                                        group_labels.append("其他风险")
+                                        continue
+                                    max_other = max(other_scores, key=lambda x: x['score'])
+                                    if max_other['score'] >= other_threshold:
+                                        group_labels.append(max_other['label'])
+                                    else:
+                                        group_labels.append("其他风险")
+                            except Exception as e:
+                                progress_callback(f"分析单元格组 {i + 1} - {i + len(group_cells)} 时发生错误：{e}")
+                                group_labels.append("未知")
+
+                            # 更新全局进度
+                            global_progress['processed'] += 1  # 每个段算作一个处理项
+                            percent = int((global_progress['processed'] / total_items) * 100)
+                            progress_callback(f"进度: {percent}%")
+
+                        # 判断是否需要标记
+                        mark_group = False
+                        for label in group_labels:
+                            if label != "正常" and label != "未知":
+                                mark_group = True
+                                break
+
+                        if mark_group:
+                            # 根据第一个非正常标签进行标记
+                            group_label = next((label for label in group_labels if label != "正常" and label != "未知"), "其他风险")
+
+                            # 应用标签和标记
+                            if group_label == "低俗":
+                                fill = PatternFill(start_color='00FF00', end_color='00FF00', fill_type='solid')  # 绿色
+                                low_vulgar_count += len(group_cells)
+                            elif group_label == "色情":
+                                fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')  # 黄色
+                                porn_count += len(group_cells)
+                            elif group_label == "其他风险":
+                                fill = PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid')  # 红色
+                                other_risk_count += len(group_cells)
+                            elif group_label == "成人":
+                                fill = PatternFill(start_color='0000FF', end_color='0000FF', fill_type='solid')  # 蓝色
+                                adult_count += len(group_cells)
+                            else:
+                                fill = None  # 未知标签不做处理
+
+                            if fill:
+                                for cell in group_cells:
+                                    cell.fill = fill
+
+                        else:
+                            normal_count += len(group_cells)
+
+            new_file_path = file_path.replace('.xlsx', '_analyzed.xlsx')
+            wb.save(new_file_path)
+
+            # 更新结果
+            result = {
+                'total_word_count': total_word_count,
+                'normal_count': normal_count,
+                'low_vulgar_count': low_vulgar_count,
+                'porn_count': porn_count,
+                'other_risk_count': other_risk_count,
+                'adult_count': adult_count,
+                'new_file_path': new_file_path
+            }
+            return result
+
+        except Exception as e:
+            progress_callback(f"处理 Excel 文档时发生错误：{e}")
+            raise
 
     else:
         raise ValueError("仅支持 .docx 和 .xlsx 文件")
-
-    progress_callback("分析完成！")
 
     # 构建结果统计信息
     result = {
@@ -359,3 +491,28 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
     }
 
     return result
+
+
+def merge_texts_with_sources(texts, sources, min_length=60):
+    """
+    合并文本，同时记录每个文本组对应的源（段落或表格单元格）。
+    返回一个列表的元组： (text_group, list_of_sources)
+    """
+    merged = []
+    current_group = ""
+    current_sources = []
+    for text, source in zip(texts, sources):
+        if len(current_group) + len(text) + 1 <= min_length:
+            if current_group:
+                current_group += " " + text
+            else:
+                current_group = text
+            current_sources.append(source)
+        else:
+            if current_group:
+                merged.append((current_group, current_sources.copy()))
+            current_group = text
+            current_sources = [source]
+    if current_group:
+        merged.append((current_group, current_sources.copy()))
+    return merged
