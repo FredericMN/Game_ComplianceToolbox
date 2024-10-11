@@ -5,7 +5,7 @@ import sys
 import json
 from datetime import datetime
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
-from PySide6.QtCore import Qt, QThread, Signal, QStandardPaths
+from PySide6.QtCore import Qt, QThread, Signal
 from .base_interface import BaseInterface
 from PySide6.QtGui import QFont
 from utils.environment_checker import EnvironmentChecker
@@ -22,28 +22,19 @@ class WelcomeInterface(BaseInterface):
         self.init_ui()  # 初始化 UI
         self.check_env_status()  # 检查环境状态
 
+    def get_current_dir(self):
+        """获取当前运行目录，兼容打包和开发环境"""
+        if getattr(sys, 'frozen', False):
+            # 如果应用被打包为单个可执行文件
+            return os.path.dirname(sys.executable)
+        else:
+            # 如果在开发环境中运行
+            return os.path.dirname(os.path.abspath(__file__))
+
     def get_env_result_file_path(self):
         """获取环境检测结果文件的绝对路径"""
-        # 尝试使用 QStandardPaths 获取标准配置目录
-        config_dir = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
-        if not config_dir:
-            # 如果无法获取配置目录，退回到当前文件所在目录
-            config_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # 确定当前运行的版本名称
-        executable_name = os.path.basename(sys.argv[0]).lower()
-        if 'cuda' in executable_name:
-            version_suffix = 'cuda'
-        else:
-            version_suffix = 'standard'
-        
-        # 设置应用程序特定的目录
-        app_specific_dir = os.path.join(config_dir, f"ComplianceToolbox_{version_suffix}")
-        if not os.path.exists(app_specific_dir):
-            os.makedirs(app_specific_dir)
-        
-        # 返回环境检测结果文件的路径
-        return os.path.join(app_specific_dir, 'env_check_result.json')
+        CURRENT_DIR = self.get_current_dir()
+        return os.path.join(CURRENT_DIR, 'env_check_result.json')
 
     def check_env_status(self):
         """检查是否已记录环境检测结果"""
