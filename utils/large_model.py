@@ -253,10 +253,10 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
     if file_type == 'docx':
         try:
             doc = Document(file_path)
-            paragraphs = [para.text.strip() for para in doc.paragraphs if para.text.strip()]
-            tables = [cell.text.strip() for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
-            combined_texts = paragraphs + tables
-            sources = paragraphs + [cell for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
+            paragraphs = [para for para in doc.paragraphs if para.text.strip()]
+            tables = [cell for table in doc.tables for row in table.rows for cell in row.cells if cell.text.strip()]
+            combined_texts = [para.text.strip() for para in paragraphs] + [cell.text.strip() for cell in tables]
+            sources = paragraphs + tables
 
             if not combined_texts:
                 progress_callback(f"文件 {file_path} 中未找到任何可处理的段落或表格内容。")
@@ -290,52 +290,51 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
 
                 for j, result in enumerate(batch_results):
                     if result is None:
-                        group_labels = ["未知"]
+                        group_label = "未知"
                     else:
                         # 根据每个文本的结果确定标签
                         group_label = determine_label_from_result(result, normal_threshold, other_threshold)
-                        group_labels = [group_label]
-                    batch_labels_per_group.append(group_labels)
+                    batch_labels_per_group.append(group_label)
                     # 更新全局进度
                     global_progress['processed'] += 1
                     percent = int((global_progress['processed'] / total_items) * 100)
                     progress_callback(f"进度: {percent}%")
 
             # 应用标签和统计
-            for group_idx, (group_labels, source_list) in enumerate(zip(batch_labels_per_group, sources_groups)):
-                label = group_labels[0] if group_labels else "未知"
+            label_color_mapping = {
+                "低俗": RGBColor(0, 255, 0),      # 绿色
+                "色情": RGBColor(255, 255, 0),    # 黄色
+                "其他风险": RGBColor(255, 0, 0),  # 红色
+                "成人": RGBColor(0, 0, 255)       # 蓝色
+            }
 
-                # 根据标签更新统计和标记
-                if label == "正常":
-                    normal_count += 1
-                elif label == "低俗":
-                    color = RGBColor(0, 255, 0)  # 绿色
-                    low_vulgar_count += 1
-                elif label == "色情":
-                    color = RGBColor(255, 255, 0)  # 黄色
-                    porn_count += 1
-                elif label == "其他风险":
-                    color = RGBColor(255, 0, 0)  # 红色
-                    other_risk_count += 1
-                elif label == "成人":
-                    color = RGBColor(0, 0, 255)  # 蓝色
-                    adult_count += 1
-                else:
-                    color = None  # 未知标签不做处理
-
-                if label != "正常" and label != "未知" and color:
-                    for source in source_list:
+            for group_idx, label in enumerate(batch_labels_per_group):
+                if label in label_color_mapping:
+                    color = label_color_mapping[label]
+                    for source in sources_groups[group_idx]:
                         if isinstance(source, Paragraph):
-                            # 段落对象
+                            # 仅修改包含问题的文本的运行
                             for run in source.runs:
-                                run.font.color.rgb = color
+                                if run.text.strip():
+                                    run.font.color.rgb = color
                         elif isinstance(source, _Cell):
-                            # Table cell 对象
                             for paragraph in source.paragraphs:
                                 for run in paragraph.runs:
-                                    run.font.color.rgb = color
-                else:
+                                    if run.text.strip():
+                                        run.font.color.rgb = color
+                    # 更新统计
+                    if label == "低俗":
+                        low_vulgar_count += 1
+                    elif label == "色情":
+                        porn_count += 1
+                    elif label == "其他风险":
+                        other_risk_count += 1
+                    elif label == "成人":
+                        adult_count += 1
+                elif label == "正常":
                     normal_count += 1
+                else:
+                    pass  # 对于“未知”标签不做处理
 
                 # 统计字数
                 total_word_count += len(text_groups[group_idx])
@@ -418,24 +417,28 @@ def analyze_single_file_with_model(file_path, classifier, progress_callback, glo
                             group_label = next((label for label in group_labels if label != "正常" and label != "未知"), "其他风险")
 
                             # 应用标签和标记
-                            if group_label == "低俗":
-                                fill = PatternFill(start_color='00FF00', end_color='00FF00', fill_type='solid')  # 绿色
-                                low_vulgar_count += len(group_cells)
-                            elif group_label == "色情":
-                                fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')  # 黄色
-                                porn_count += len(group_cells)
-                            elif group_label == "其他风险":
-                                fill = PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid')  # 红色
-                                other_risk_count += len(group_cells)
-                            elif group_label == "成人":
-                                fill = PatternFill(start_color='0000FF', end_color='0000FF', fill_type='solid')  # 蓝色
-                                adult_count += len(group_cells)
-                            else:
-                                fill = None  # 未知标签不做处理
+                            fill_color_mapping = {
+                                "低俗": '00FF00',      # 绿色
+                                "色情": 'FFFF00',      # 黄色
+                                "其他风险": 'FF0000',  # 红色
+                                "成人": '0000FF'       # 蓝色
+                            }
 
-                            if fill:
+                            fill_color = fill_color_mapping.get(group_label, None)
+
+                            if fill_color:
+                                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type='solid')
                                 for cell in group_cells:
                                     cell.fill = fill
+                                    # 更新统计
+                                    if group_label == "低俗":
+                                        low_vulgar_count += 1
+                                    elif group_label == "色情":
+                                        porn_count += 1
+                                    elif group_label == "其他风险":
+                                        other_risk_count += 1
+                                    elif group_label == "成人":
+                                        adult_count += 1
                         else:
                             normal_count += len(group_cells)
 
