@@ -29,6 +29,7 @@ from interfaces.settings_interface import SettingsInterface
 from interfaces.version_matching_interface import VersionMatchingInterface
 from interfaces.large_model_interface import LargeModelInterface
 from utils.version_checker import VersionChecker, VersionCheckWorker
+from interfaces.large_model_optimization_interface import LargeModelOptimizationInterface
 from PySide6.QtCore import QThread
 
 def resource_path(relative_path):
@@ -61,6 +62,7 @@ class MainWindow(FramelessWindow):
         self.developingInterface = EmptyInterface(parent=self)  # 修改此行
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
+        self.largeModelOptimizationInterface = LargeModelOptimizationInterface(self)
 
         # 初始化布局和导航栏
         self.init_layout()
@@ -106,6 +108,11 @@ class MainWindow(FramelessWindow):
 
         self.add_sub_interface(
             self.largeModelInterface, FIF.PROJECTOR, "大模型语义分析"
+        )
+
+        # 添加新界面到导航栏
+        self.add_sub_interface(
+            self.largeModelOptimizationInterface, FIF.DATE_TIME, "大模型文案正向优化"
         )
 
         self.add_sub_interface(

@@ -14,3 +14,4 @@ transformers
 torch
 huggingface_hub
 py7zr
+zhipuai
