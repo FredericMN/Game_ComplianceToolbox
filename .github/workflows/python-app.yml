@@ -101,7 +101,7 @@ jobs:
           --hidden-import=openpyxl --hidden-import=webdriver_manager `
           --hidden-import=pandas --hidden-import=xlrd --hidden-import=requests `
           --hidden-import=docx --hidden-import=python-docx --hidden-import=transformers `
-          --hidden-import=torch --hidden-import=huggingface_hub --hidden-import=py7zr --hidden-import=zhipuai`
+          --hidden-import=torch --hidden-import=huggingface_hub --hidden-import=py7zr --hidden-import=zhipuai `
           main.py
 
     - name: Compress Standard Build Output
@@ -143,7 +143,6 @@ jobs:
           --hidden-import=torch --hidden-import=huggingface_hub --hidden-import=py7zr --hidden-import=zhipuai `
           main.py
 
-    # 修改后的压缩步骤
     - name: Compress CUDA Build Output with 7z
       shell: pwsh
       run: |
