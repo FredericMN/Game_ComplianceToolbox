@@ -1,410 +1,562 @@
-# 文件: project-01/utils/crawler.py
+# utils/crawler.py
 
-import os  # 添加 os 模块用于文件名操作
+import os
 import time
+import random
 import datetime
 import openpyxl
 import re
+import shutil  # 用于copyfile
+import threading
+import requests
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.service import Service as EdgeService
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def crawl_new_games(start_date_str, end_date_str, progress_callback):
-    # 配置 WebDriver
-    options = webdriver.EdgeOptions()
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-infobars")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) " 
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/113.0.0.0 Safari/537.36")
-    # 如果不需要显示浏览器界面，可以取消下一行的注释
-    # options.add_argument('--headless')
-    
-    driver = webdriver.Edge(service=EdgeService(EdgeChromiumDriverManager().install()), options=options)
-    
+MAX_WORKERS = 3
+
+def progress_log_callback(callback, message):
+    """统一日志输出"""
+    if callback:
+        callback(message)
+    else:
+        print(message)
+
+def random_delay(min_sec=0.5, max_sec=1.5):
+    """避免爬取过快"""
+    time.sleep(random.uniform(min_sec, max_sec))
+
+# -----------------------------------------------------------------------------
+# 新游爬虫
+# -----------------------------------------------------------------------------
+def crawl_new_games(
+    start_date_str,
+    end_date_str,
+    progress_callback=None,
+    enable_version_match=True,
+    progress_percent_callback=None
+):
+    """
+    1. 无“序号”列；列头: [ "日期", "游戏名称", "状态", "厂商", "类型", "评分" ]
+    2. 分天并发，每日爬完就输出并写到 Excel，但最终爬完后，再做一次“按日期升序”全表排序。
+    3. 若 enable_version_match=True，则自动在同一个 Excel 里匹配版号并存储（不改名/不另存）。
+    """
+
+    # 提示
+    progress_log_callback(progress_callback,
+        "任务开始，可能存在网络缓慢等情况，请耐心等待。")
+
     try:
-        # 准备 Excel 文件
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        excel_filename = f"游戏数据_{today_str}.xlsx"
-        
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "游戏数据"
-        headers = ["日期", "状态", "名称", "厂商", "类型", "评分"]
-        ws.append(headers)
-        
-        # 处理日期范围
-        if start_date_str and end_date_str:
-            try:
-                start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-                end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
-            except ValueError:
-                progress_callback("日期格式不正确，请输入yyyy-mm-dd格式的日期")
-                driver.quit()
-                return
-            if end_date < start_date:
-                progress_callback("结束日期不能早于起始日期")
-                driver.quit()
-                return
-            delta_days = (end_date - start_date).days + 1
-            date_list = [start_date + datetime.timedelta(days=i) for i in range(delta_days)]
-        else:
-            start_date = datetime.date.today()
-            date_list = [start_date + datetime.timedelta(days=i) for i in range(5)]
-        
-        # 爬取数据
-        for crawl_date in date_list:
-            crawl_date_str = crawl_date.strftime("%Y-%m-%d")
-            progress_callback(f"正在爬取日期：{crawl_date_str}")
-            base_url = f"https://www.taptap.cn/app-calendar/{crawl_date_str}"
-            driver.get(base_url)
-            
-            try:
-                games = WebDriverWait(driver, 10).until(
-                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.daily-event-list__content > a.tap-router"))
-                )
-            except Exception as e:
-                progress_callback(f"加载游戏列表时出错：{e}")
-                continue
+        sd = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        ed = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+        if ed < sd:
+            msg="结束日期不能早于起始日期，操作已取消。"
+            progress_log_callback(progress_callback, msg)
+            if progress_percent_callback:
+                progress_percent_callback(100, 0)
+            return
+    except:
+        msg="日期格式不正确，请使用 yyyy-MM-dd。操作已取消。"
+        progress_log_callback(progress_callback, msg)
+        if progress_percent_callback:
+            progress_percent_callback(100, 0)
+        return
 
-            progress_callback(f"找到 {len(games)} 个游戏。")
-            for index, game in enumerate(games, start=1):
-                try:
-                    # 提取游戏名称
-                    try:
-                        name_element = game.find_element(By.CSS_SELECTOR, "div.daily-event-app-info__title")
-                        name = name_element.get_attribute("content").strip()
-                    except:
-                        name = "未知名称"
+    date_list=[]
+    delta=(ed - sd).days+1
+    for i in range(delta):
+        date_list.append(sd + datetime.timedelta(days=i))
 
-                    # 提取游戏类型
-                    try:
-                        type_elements = game.find_elements(By.CSS_SELECTOR, "div.daily-event-app-info__tag div.tap-label-tag")
-                        types = "/".join([type_elem.text.strip() for type_elem in type_elements])
-                    except:
-                        types = "未知类型"
+    total_dates=len(date_list)
+    if total_dates==0:
+        progress_log_callback(progress_callback,
+            "无可爬取日期。")
+        if progress_percent_callback:
+            progress_percent_callback(100,0)
+        return
 
-                    # 提取评分
-                    try:
-                        rating_element = game.find_element(By.CSS_SELECTOR, "div.daily-event-app-info__rating .tap-rating__number")
-                        rating = rating_element.text.strip()
-                    except:
-                        rating = "未知评分"
+    # 创建Excel
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    excel_filename = f"游戏数据_{today_str}.xlsx"
 
-                    # 提取状态
-                    try:
-                        status_element = game.find_element(By.CSS_SELECTOR, "span.event-type-label__title")
-                        status = status_element.text.strip()
-                    except:
-                        try:
-                            status_element = game.find_element(By.CSS_SELECTOR, "div.event-recommend-label__title")
-                            status = status_element.text.strip()
-                        except:
-                            status = "未知状态"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title="游戏数据"
+    ws.append(["日期","游戏名称","状态","厂商","类型","评分"])  # 无“序号”
+    wb.save(excel_filename)
 
-                    progress_callback(f"正在爬取第 {index} 个游戏：{name}")
+    progress_log_callback(progress_callback,
+        f"共需爬取 {total_dates} 天的新游信息，将分天爬取...")
 
-                    # 提取游戏链接
-                    href = game.get_attribute("href")
-                    game_url = href if href.startswith("http") else f"https://www.taptap.cn{href}"
-
-                    # 打开游戏子页面
-                    driver.execute_script("window.open(arguments[0]);", game_url)
-                    driver.switch_to.window(driver.window_handles[1])
-
-                    # 等待页面加载完成
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.single-info__content"))
-                        )
-                    except Exception:
-                        progress_callback("找不到厂商信息")
-                        manufacturer = "未知厂商"
-                        driver.close()
-                        driver.switch_to.window(driver.window_handles[0])
-                        ws.append([crawl_date_str, status, name, manufacturer, types, rating])
-                        time.sleep(0.2)
-                        continue
-
-                    # 提取厂商信息
-                    try:
-                        info_blocks = driver.find_elements(By.CSS_SELECTOR, "div.single-info__content")
-                        manufacturer = "未知厂商"
-                        priority = ["厂商", "发行", "发行商", "开发"]
-                        info_dict = {}
-                        for block in info_blocks:
-                            try:
-                                label_element = block.find_element(By.CSS_SELECTOR, ".caption-m12-w12")
-                                label = label_element.text.strip()
-                                value_element = block.find_element(By.CSS_SELECTOR, ".single-info__content__value")
-                                value = value_element.text.strip()
-                                info_dict[label] = value
-                            except:
-                                continue
-                        for key in priority:
-                            if key in info_dict:
-                                manufacturer = info_dict[key]
-                                break
-                        if manufacturer == "未知厂商":
-                            progress_callback("找不到厂商信息")
-                    except:
-                        manufacturer = "未知厂商"
-                        progress_callback("找不到厂商信息")
-
-                    progress_callback(f"名称: {name}, 厂商: {manufacturer}, 类型: {types}, 评分: {rating}, 状态: {status}")
-
-                    # 关闭子页面并切换回主页面
-                    driver.close()
-                    driver.switch_to.window(driver.window_handles[0])
-
-                    # 追加数据到 Excel
-                    ws.append([crawl_date_str, status, name, manufacturer, types, rating])
-
-                    # 等待一段时间
-                    time.sleep(0.2)
-                except Exception as e:
-                    progress_callback(f"第 {index} 个游戏爬取失败：{e}")
-                    # 关闭可能打开的子页面
-                    if len(driver.window_handles) > 1:
-                        driver.close()
-                        driver.switch_to.window(driver.window_handles[0])
-                    # 追加数据为未知
-                    ws.append([crawl_date_str, "未知状态", "未知名称", "未知厂商", "未知类型", "未知评分"])
-                    time.sleep(0.2)
-                    continue
-
-        # 保存 Excel 文件
-        wb.save(excel_filename)
-        progress_callback(f"数据已成功保存到 {excel_filename}，接下来将继续匹配版号数据，请稍后……")
-
-        # 调用版号匹配函数，并传递是否添加后缀的参数
-        match_version_numbers(excel_filename, progress_callback, append_suffix=False)
-
-    finally:
-        # 关闭 WebDriver
-        driver.quit()
-
-def match_version_numbers(excel_filename, progress_callback, append_suffix=True):
-    # 配置 WebDriver
-    options = webdriver.EdgeOptions()
-    options.add_argument("--start-maximized")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-infobars")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) " 
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/113.0.0.0 Safari/537.36")
-    # 如果不需要显示浏览器界面，可以取消下一行的注释
-    # options.add_argument('--headless')
-    
-    driver = webdriver.Edge(service=EdgeService(EdgeChromiumDriverManager().install()), options=options)
-    
-    try:
-        # 打开 Excel 文件
+    def crawl_one_day(d):
+        """
+        返回 (day_str, [ (name, status, man, types, rating) ])，若结构异常 => raise RuntimeError
+        """
+        day_str=d.strftime("%Y-%m-%d")
+        opt = webdriver.EdgeOptions()
+        driver=webdriver.Edge(
+            service=EdgeService(EdgeChromiumDriverManager().install()),
+            options=opt
+        )
+        results=[]
         try:
-            wb = openpyxl.load_workbook(excel_filename)
-        except FileNotFoundError:
-            progress_callback(f"文件 {excel_filename} 未找到。")
-            driver.quit()
-            return
-
-        ws = wb.active
-
-        # 检查并添加新表头（包含“游戏名称”）
-        existing_headers = [cell.value for cell in ws[1]]
-        new_headers = ["游戏名称", "出版单位", "运营单位", "文号", "出版物号", "时间", "游戏类型", "申报类别", "是否存在多个结果"]
-        
-        for header in new_headers:
-            if header not in existing_headers:
-                ws.cell(row=1, column=len(existing_headers) + 1, value=header)
-                existing_headers.append(header)
-        
-        # 确定新表头的起始列索引
-        new_header_start_col = len(existing_headers) - len(new_headers) + 1  # 1-based index
-        
-        # 自动检测游戏名称所在的列（“游戏名称”或“名称”）
-        game_name_col = None
-        for idx, header in enumerate(existing_headers, start=1):
-            if header in ["游戏名称", "名称"]:
-                game_name_col = idx
-                break
-        
-        if game_name_col is None:
-            progress_callback("未找到表头中的“游戏名称”或“名称”列，请检查Excel文件的表头。")
-            driver.quit()
-            return
-        
-        # 从现有 Excel 中读取所有游戏名称及其所在行（跳过表头）
-        game_rows = []
-        for row in ws.iter_rows(min_row=2, values_only=False):
-            game_name = row[game_name_col - 1].value  # openpyxl的列索引从0开始
-            game_rows.append((row, game_name))
-        
-        # 定义函数以移除游戏名称中的括号及其内容
-        def clean_game_name(name):
-            if not name:
-                return ""
-            # 移除中文括号及内容
-            name = re.sub(r'（[^）]*）', '', name)
-            # 移除英文括号及内容
-            name = re.sub(r'\([^)]*\)', '', name)
-            return name.strip()
-        
-        # 爬取版号信息的函数
-        def get_game_info_from_nppa(game_name_original):
-            game_name_clean = clean_game_name(game_name_original)
-            search_url = f"https://www.nppa.gov.cn/bsfw/jggs/cxjg/index.html?mc={game_name_clean}&cbdw=&yydw=&wh=undefined&description=#"
-            driver.get(search_url)
-            
+            url=f"https://www.taptap.cn/app-calendar/{day_str}"
+            driver.get(url)
             try:
-                # 等待查询结果加载
+                WebDriverWait(driver,10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR,
+                        "div.daily-event-list__content > a.tap-router"))
+                )
+            except:
+                raise RuntimeError("网页结构疑似存在更新变动，请联系开发者进行解决。")
+
+            games = driver.find_elements(
+                By.CSS_SELECTOR,
+                "div.daily-event-list__content > a.tap-router"
+            )
+            for g in games:
+                random_delay()
+                try:
+                    name_el=g.find_element(
+                        By.CSS_SELECTOR,"div.daily-event-app-info__title")
+                    name=name_el.get_attribute("content").strip()
+                except:
+                    name="未知名称"
+                try:
+                    t_list=g.find_elements(
+                        By.CSS_SELECTOR,
+                        "div.daily-event-app-info__tag div.tap-label-tag")
+                    types="/".join([t.text.strip() for t in t_list])
+                except:
+                    types="未知类型"
+                try:
+                    rating_el=g.find_element(
+                        By.CSS_SELECTOR,
+                        "div.daily-event-app-info__rating .tap-rating__number")
+                    rating=rating_el.text.strip()
+                except:
+                    rating="未知评分"
+                try:
+                    st_el=g.find_element(
+                        By.CSS_SELECTOR,"span.event-type-label__title")
+                    status=st_el.text.strip()
+                except:
+                    try:
+                        st2=g.find_element(
+                            By.CSS_SELECTOR,"div.event-recommend-label__title")
+                        status=st2.text.strip()
+                    except:
+                        status="未知状态"
+
+                # 子页面
+                href=g.get_attribute("href")
+                if not href.startswith("http"):
+                    href="https://www.taptap.cn"+href
+                driver.execute_script("window.open(arguments[0]);", href)
+                driver.switch_to.window(driver.window_handles[1])
+                random_delay()
+
+                man="未知厂商"
+                try:
+                    WebDriverWait(driver,5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR,
+                            "div.single-info__content"))
+                    )
+                    blocks=driver.find_elements(By.CSS_SELECTOR,"div.single-info__content")
+                    priority=["厂商","发行","发行商","开发"]
+                    info_dict={}
+                    for b in blocks:
+                        try:
+                            lab=b.find_element(
+                                By.CSS_SELECTOR,".caption-m12-w12").text.strip()
+                            val=b.find_element(
+                                By.CSS_SELECTOR,".single-info__content__value").text.strip()
+                            info_dict[lab]=val
+                        except:
+                            pass
+                    for pk in priority:
+                        if pk in info_dict:
+                            man=info_dict[pk]
+                            break
+                except:
+                    pass
+
+                driver.close()
+                driver.switch_to.window(driver.window_handles[0])
+
+                results.append( (name, status, man, types, rating) )
+        finally:
+            driver.quit()
+        return (day_str, results)
+
+    completed=0
+
+    # 并发: 以天为粒度
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_map={ executor.submit(crawl_one_day, d): d for d in date_list}
+        for future in as_completed(future_map):
+            d = future_map[future]
+            try:
+                day_str, day_data = future.result()
+            except Exception as e:
+                progress_log_callback(progress_callback, str(e))
+                if progress_percent_callback:
+                    progress_percent_callback(100,0)
+                return
+
+            if day_data:
+                wb_cur=openpyxl.load_workbook(excel_filename)
+                ws_cur=wb_cur.active
+                block=[f"\n=== [日期 {day_str}, 共{len(day_data)} 款游戏] ==="]
+                for (nm, st, man, ty, rt) in day_data:
+                    ws_cur.append([day_str,nm,st,man,ty,rt])
+                    block.append(
+                        f"  * {nm}\n"
+                        f"    状态：{st}\n"
+                        f"    厂商：{man}\n"
+                        f"    类型：{ty}\n"
+                        f"    评分：{rt}"
+                    )
+                wb_cur.save(excel_filename)
+                text="\n".join(block)
+                progress_log_callback(progress_callback, text)
+            else:
+                progress_log_callback(progress_callback,
+                    f"=== [日期 {day_str}] 无游戏信息 ===")
+
+            completed+=1
+            if progress_percent_callback:
+                val=int(completed*100/total_dates)
+                progress_percent_callback(val,0)
+
+    # 全部爬完后 => 对整个Excel按“日期”升序排序
+    final_wb=openpyxl.load_workbook(excel_filename)
+    final_ws=final_wb.active
+    data_rows=list(final_ws.values)
+    headers=data_rows[0]
+    body=data_rows[1:]
+    def parse_date(ds):
+        try:
+            return datetime.datetime.strptime(ds, "%Y-%m-%d")
+        except:
+            return datetime.datetime(1970,1,1)
+    body.sort(key=lambda row: parse_date(row[0]))
+    final_ws.delete_rows(1, final_ws.max_row)
+    final_ws.append(headers)
+    for row in body:
+        final_ws.append(row)
+    final_wb.save(excel_filename)
+
+    progress_log_callback(progress_callback,
+        f"新游数据已保存至 {excel_filename} (已按日期升序整理)")
+
+    if progress_percent_callback:
+        progress_percent_callback(100,0)
+
+    # 若自动版号匹配
+    if enable_version_match:
+        if progress_percent_callback:
+            progress_percent_callback(0,1)
+        match_version_numbers(
+            excel_filename,
+            progress_callback=progress_callback,
+            progress_percent_callback=progress_percent_callback,
+            stage=1,
+            create_new_file=False
+        )
+
+# -----------------------------------------------------------------------------
+# 版号匹配
+# -----------------------------------------------------------------------------
+def match_version_numbers(
+    excel_filename,
+    progress_callback=None,
+    progress_percent_callback=None,
+    stage=1,
+    create_new_file=True
+):
+    """
+    - 如果 create_new_file=True => 基于原文件创建副本，并在副本上进行后续操作
+    - 如果 create_new_file=False => 在同文件追加
+    - 分段输出(每2~3行)
+    - 需添加表头: [ "游戏名称", "出版单位", "运营单位", "文号", "出版物号", "时间", "游戏类型", "申报类别", "是否多个结果" ]
+    """
+    import shutil  # 用于复制文件
+
+    progress_log_callback(progress_callback,
+        "开始版号匹配，可能存在网络缓慢等情况，请耐心等待。")
+
+    if not os.path.exists(excel_filename):
+        progress_log_callback(progress_callback,
+            f"文件 {excel_filename} 不存在，无法进行版号匹配。")
+        if progress_percent_callback:
+            progress_percent_callback(100, stage)
+        return
+
+    # 若要求另存为新文件，则先创建副本，并使用该副本进行操作
+    if create_new_file:
+        base, ext = os.path.splitext(excel_filename)
+        new_fname = f"{base}-已匹配版号{ext}"
+        try:
+            shutil.copyfile(excel_filename, new_fname)
+            progress_log_callback(progress_callback,
+                f"已基于原文件创建副本 {new_fname}，开始在副本上匹配版号。")
+            excel_filename = new_fname  # 后续操作使用新副本
+        except Exception as copy_err:
+            progress_log_callback(progress_callback,
+                f"创建文件副本失败: {copy_err}")
+            if progress_percent_callback:
+                progress_percent_callback(100, stage)
+            return
+
+    try:
+        wb = openpyxl.load_workbook(excel_filename)
+    except:
+        progress_log_callback(progress_callback,
+            f"无法加载Excel：{excel_filename}")
+        if progress_percent_callback:
+            progress_percent_callback(100, stage)
+        return
+
+    ws = wb.active
+    new_headers = [
+        "游戏名称","出版单位","运营单位","文号","出版物号",
+        "时间","游戏类型","申报类别","是否多个结果"
+    ]
+    current_cols = [c.value for c in ws[1]]
+    for nh in new_headers:
+        if nh not in current_cols:
+            ws.cell(row=1, column=len(current_cols)+1, value=nh)
+            current_cols.append(nh)
+    wb.save(excel_filename)
+
+    name_col = None
+    for idx, c in enumerate(current_cols, start=1):
+        if c in ["游戏名称","名称"]:
+            name_col = idx
+            break
+
+    if name_col is None:
+        progress_log_callback(progress_callback,
+            "未找到'游戏名称'或'名称'列，跳过版号匹配。")
+        if progress_percent_callback:
+            progress_percent_callback(100, stage)
+        return
+
+    game_list = []
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=False), start=2):
+        val = row[name_col - 1].value
+        if val:
+            game_list.append((row_idx, val))
+
+    total_count = len(game_list)
+    if total_count == 0:
+        progress_log_callback(progress_callback,
+            "没有需要匹配版号的条目。")
+        if progress_percent_callback:
+            progress_percent_callback(100, stage)
+        return
+
+    progress_log_callback(progress_callback,
+        f"需要匹配 {total_count} 条游戏数据...")
+
+    #======== 修复点：写回9列时，使用表头定位列索引 ========
+    fields_for_match = [
+        "游戏名称",   # info[0]
+        "出版单位",   # info[1]
+        "运营单位",   # info[2]
+        "文号",       # info[3]
+        "出版物号",   # info[4]
+        "时间",       # info[5]
+        "游戏类型",   # info[6]
+        "申报类别",   # info[7]
+        "是否多个结果" # info[8]
+    ]
+
+    cache = {}
+    def fetch_game_info(g_name):
+        if g_name in cache:
+            return cache[g_name]
+        opt = webdriver.EdgeOptions()
+        driver = webdriver.Edge(
+            service=EdgeService(EdgeChromiumDriverManager().install()),
+            options=opt
+        )
+        res = None
+        try:
+            qn = re.sub(r'（[^）]*）', '', g_name)
+            qn = re.sub(r'\([^)]*\)', '', qn).strip()
+            url = (f"https://www.nppa.gov.cn/bsfw/jggs/cxjg/index.html?"
+                   f"mc={qn}&cbdw=&yydw=&wh=undefined&description=#")
+            driver.get(url)
+            try:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "#dataCenter"))
                 )
-                time.sleep(1)  # 确保内容完全加载
+            except:
+                raise RuntimeError("网页结构疑似存在更新变动，请联系开发者进行解决。")
 
-                results = driver.find_elements(By.CSS_SELECTOR, "#dataCenter tr")
-                if len(results) == 0:
-                    return ["", "", "", "", "", "", "", "", "否"]  # 无结果
-                elif len(results) > 1:
-                    # 多个结果时，先找完全匹配的，否则选择第一个结果
-                    exact_match = None
-                    for result in results:
-                        try:
-                            game_title = result.find_element(By.CSS_SELECTOR, "a").text.strip()
-                            if game_title == game_name_original:
-                                exact_match = result
-                                break
-                        except:
-                            continue
-                    if exact_match:
-                        return extract_game_info(exact_match, "是")
-                    else:
-                        return extract_game_info(results[0], "是")
-                else:
-                    return extract_game_info(results[0], "否")
-            except Exception:
-                # 在匹配过程中遇到异常，返回默认值
-                return ["", "", "", "", "", "", "", "", "否"]  # 出现异常时
-
-        # 提取游戏信息的函数
-        def extract_game_info(result, multiple_results):
             try:
-                cells = result.find_elements(By.TAG_NAME, "td")
-                if len(cells) < 7:
-                    return ["", "", "", "", "", "", "", "", multiple_results]
-                
-                game_name = cells[1].text.strip()
-                publisher = cells[2].text.strip()
-                operator = cells[3].text.strip()
-                approval_number = cells[4].text.strip()
-                publication_number = cells[5].text.strip()
-                date = cells[6].text.strip()
-
-                # 获取详情页链接
-                try:
-                    detail_url = cells[1].find_element(By.TAG_NAME, "a").get_attribute("href")
-                except:
-                    detail_url = ""
-
-                if detail_url:
-                    # 打开详情页
-                    driver.execute_script("window.open(arguments[0]);", detail_url)
-                    driver.switch_to.window(driver.window_handles[1])
-
-                    try:
-                        # 等待详情页内容加载
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, ".cFrame.nFrame"))
-                        )
-                        time.sleep(1)  # 确保内容完全加载
-
-                        # 提取游戏类型和申报类别
-                        game_type = ""
-                        apply_category = ""
-                        rows = driver.find_elements(By.CSS_SELECTOR, ".cFrame.nFrame table tr")
-                        for row in rows:
-                            try:
-                                label = row.find_element(By.XPATH, "./td[1]").text.strip()
-                                value = row.find_element(By.XPATH, "./td[2]").text.strip()
-                                if label == "游戏类型":
-                                    game_type = value
-                                elif label == "申报类别":
-                                    apply_category = value
-                            except:
-                                continue
-                    except Exception:
-                        # 在提取详情页信息时遇到异常，设置默认值
-                        game_type = ""
-                        apply_category = ""
-
-                    # 关闭详情页并切换回主窗口
-                    driver.close()
-                    driver.switch_to.window(driver.window_handles[0])
-                else:
-                    game_type = ""
-                    apply_category = ""
-
-                return [
-                    game_name, publisher, operator, approval_number, 
-                    publication_number, date, game_type, apply_category, multiple_results
-                ]
-            except Exception:
-                # 在提取游戏信息时遇到异常，返回默认值
-                return ["", "", "", "", "", "", "", "", multiple_results]
-
-        # 遍历每个游戏名称并爬取版号信息
-        for idx, (row_cells, game_name_original) in enumerate(game_rows, start=2):
-            if game_name_original:
-                game_name_display = game_name_original
-                progress_callback(f"正在查找游戏: {game_name_display} (第 {idx-1} 个游戏)")
-                game_info = get_game_info_from_nppa(game_name_original)
-                
-                # 将信息写入对应行的指定列（包括“游戏名称”）
-                for i, info in enumerate(game_info):
-                    ws.cell(row=idx, column=new_header_start_col + i, value=info)
-                
-                # 输出对应的信息到控制台
-                output_info = {
-                    "游戏名称": game_info[0],
-                    "出版单位": game_info[1],
-                    "运营单位": game_info[2],
-                    "文号": game_info[3],
-                    "出版物号": game_info[4],
-                    "时间": game_info[5],
-                    "游戏类型": game_info[6],
-                    "申报类别": game_info[7],
-                    "是否存在多个结果": game_info[8]
-                }
-                progress_callback(f"查询结果: {output_info}\n")
-                
-                # 等待一段时间以避免过快请求
-                time.sleep(1)
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "#dataCenter tr"))
+                )
+            except:
+                rows2 = []
             else:
-                progress_callback(f"第 {idx-1} 行游戏名称为空，跳过。")
-                continue
+                rows2 = driver.find_elements(By.CSS_SELECTOR, "#dataCenter tr")
 
-        # 确定输出文件名
-        if append_suffix:
-            base, ext = os.path.splitext(excel_filename)
-            output_filename = f"{base}-已匹配版号数据{ext}"
-        else:
-            output_filename = excel_filename
+            if not rows2:
+                res = None
+            else:
+                multiple_flag = "是" if len(rows2) > 1 else "否"
+                exact_elem = None
+                for rr in rows2:
+                    time.sleep(0.3)
+                    try:
+                        t = rr.find_element(By.CSS_SELECTOR, "a").text.strip()
+                        if t == g_name:
+                            exact_elem = rr
+                            break
+                    except:
+                        pass
+                if not exact_elem:
+                    exact_elem = rows2[0]
+                res = extract_game_info(exact_elem, multiple_flag, driver)
+        finally:
+            driver.quit()
 
-        # 保存更新后的 Excel 文件
+        cache[g_name] = res
+        return res
+
+    def extract_game_info(elem, multi_flag, driver):
         try:
-            wb.save(output_filename)
-            progress_callback(f"版号信息已成功补充到 {output_filename}")
-        except PermissionError:
-            progress_callback(f"无法保存文件 {output_filename}。请确保文件未被打开并重试。")
-    
-    finally:
-        # 关闭 WebDriver
-        driver.quit()
+            tds = elem.find_elements(By.TAG_NAME, "td")
+            if len(tds) < 7:
+                return None
+            gn = tds[1].text.strip()
+            pub = tds[2].text.strip()
+            op = tds[3].text.strip()
+            appr = tds[4].text.strip()
+            pubn = tds[5].text.strip()
+            ds = tds[6].text.strip()
+
+            detail_url = ""
+            try:
+                detail_url = tds[1].find_element(By.TAG_NAME, "a").get_attribute("href")
+            except:
+                pass
+
+            gtype, appcat = "", ""
+            if detail_url:
+                driver.execute_script("window.open(arguments[0]);", detail_url)
+                driver.switch_to.window(driver.window_handles[1])
+                random_delay()
+                lines = driver.find_elements(By.CSS_SELECTOR, ".cFrame.nFrame table tr")
+                for ln in lines:
+                    try:
+                        lab = ln.find_element(By.XPATH, "./td[1]").text.strip()
+                        val = ln.find_element(By.XPATH, "./td[2]").text.strip()
+                        if lab == "游戏类型":
+                            gtype = val
+                        elif lab == "申报类别":
+                            appcat = val
+                    except:
+                        pass
+                driver.close()
+                driver.switch_to.window(driver.window_handles[0])
+
+            return [gn, pub, op, appr, pubn, ds, gtype, appcat, multi_flag]
+        except:
+            return None
+
+    partial_flush_size = 3
+    completed = 0
+    buffered = []
+    results_map = {}
+
+    def flush_results(buf):
+        if not buf:
+            return []
+        buf.sort(key=lambda x: x[0])  # row_idx升序
+        lines = []
+        wb2 = openpyxl.load_workbook(excel_filename)
+        ws2 = wb2.active
+        # 取一次完整的表头(字符串列表)
+        head_cols = [c.value for c in ws2[1]]
+
+        for (r_idx, g_n, info) in buf:
+            if info:
+                # info顺序: [gn, pub, op, appr, pubn, ds, gtype, appcat, multi_flag]
+                # 逐一写入表头对应的列
+                block = [
+                    f"--- [行 {r_idx}, 游戏名: {g_n}] ---",
+                    f"  游戏名称：{info[0]}",
+                    f"  出版单位：{info[1]}",
+                    f"  运营单位：{info[2]}",
+                    f"  文号：{info[3]}",
+                    f"  出版物号：{info[4]}",
+                    f"  时间：{info[5]}",
+                    f"  游戏类型：{info[6]}",
+                    f"  申报类别：{info[7]}",
+                    f"  是否多个结果：{info[8]}"
+                ]
+                lines.extend(block)
+                # 按表头名字依次写入
+                for i, field_name in enumerate([
+                    "游戏名称","出版单位","运营单位","文号","出版物号",
+                    "时间","游戏类型","申报类别","是否多个结果"
+                ]):
+                    # 找到该列
+                    if field_name in head_cols:
+                        col_idx = head_cols.index(field_name) + 1  # 1-based
+                        ws2.cell(row=r_idx, column=col_idx, value=info[i])
+                    # 若找不到就不写
+            else:
+                lines.append(f"--- [行 {r_idx}, 游戏名: {g_n}] => 未查询到该游戏版号信息。")
+
+        wb2.save(excel_filename)
+        text = "\n".join(lines)
+        progress_log_callback(progress_callback, text)
+        return []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        future_map = {}
+        for (r_idx, g_n) in game_list:
+            future = ex.submit(fetch_game_info, g_n)
+            future_map[future] = (r_idx, g_n)
+
+        for future in as_completed(future_map):
+            row_i, g_na = future_map[future]
+            try:
+                info = future.result()
+            except Exception as e:
+                progress_log_callback(progress_callback, str(e))
+                if progress_percent_callback:
+                    progress_percent_callback(100, stage)
+                return
+            results_map[row_i] = info
+            buffered.append((row_i, g_na, info))
+            completed += 1
+            if len(buffered) >= partial_flush_size:
+                buffered = flush_results(buffered)
+            if progress_percent_callback:
+                pr = int(completed * 100 / total_count)
+                progress_percent_callback(pr, stage)
+
+    if buffered:
+        buffered = flush_results(buffered)
+
+    # 若 create_new_file=True，已在开头复制并操作副本，不再另存
+    if create_new_file:
+        pass
+    else:
+        progress_log_callback(progress_callback,
+            f"版号匹配完成，结果已追加到原文件 {excel_filename}")
+
+    if progress_percent_callback:
+        progress_percent_callback(100, stage)

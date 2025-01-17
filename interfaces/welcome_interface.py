@@ -1,43 +1,43 @@
-# welcome_interface.py
+# interfaces/welcome_interface.py
 
 import os
 import sys
 import json
 from datetime import datetime
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton, QTextEdit
+from PySide6.QtWidgets import (
+    QLabel, QVBoxLayout, QHBoxLayout, QWidget, QFrame, QPushButton,
+    QTextEdit, QTreeWidget, QTreeWidgetItem
+)
 from PySide6.QtCore import Qt, QThread, Signal
 from .base_interface import BaseInterface
 from PySide6.QtGui import QFont
 from utils.environment_checker import EnvironmentChecker
 
+
 class WelcomeInterface(BaseInterface):
     """欢迎页界面"""
-    # 定义信号
+
     environment_check_started = Signal()
-    environment_check_finished = Signal(bool)  # 参数表示是否存在错误
+    environment_check_finished = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.env_result_file = self.get_env_result_file_path()
-        self.init_ui()  # 初始化 UI
-        self.check_env_status()  # 检查环境状态
+        self.init_ui()
+        self.check_env_status()
 
     def get_current_dir(self):
-        """获取当前运行目录，兼容打包和开发环境"""
         if getattr(sys, 'frozen', False):
-            # 如果应用被打包为单个可执行文件
             return os.path.dirname(sys.executable)
         else:
-            # 如果在开发环境中运行
             return os.path.dirname(os.path.abspath(__file__))
 
     def get_env_result_file_path(self):
-        """获取环境检测结果文件的绝对路径"""
         CURRENT_DIR = self.get_current_dir()
         return os.path.join(CURRENT_DIR, 'env_check_result.json')
 
     def check_env_status(self):
-        """检查是否已记录环境检测结果"""
+        """若已有检测结果则加载，否则执行新的检测"""
         if os.path.exists(self.env_result_file):
             try:
                 with open(self.env_result_file, 'r', encoding='utf-8') as f:
@@ -46,23 +46,19 @@ class WelcomeInterface(BaseInterface):
                 result = data.get('result')
                 if date_str and (result is not None):
                     if result:
-                        message = f"{date_str} 检测运行环境为通过，可直接使用，如遇问题可再次检测！"
+                        message = f"{date_str} 检测环境：通过。可直接使用。如遇问题可再次检测！"
                     else:
-                        message = f"{date_str} 检测运行环境为不通过，建议再次检测或获取帮助！"
+                        message = f"{date_str} 检测环境：不通过。建议再次检测或获取帮助！"
                     self.output_text_edit.append(message)
                 else:
-                    # 如果文件内容不完整，重新进行检测
                     self.run_environment_check()
             except Exception as e:
-                # 如果读取文件出错，重新进行检测
                 self.output_text_edit.append(f"读取检测结果失败，重新检测。错误信息：{str(e)}")
                 self.run_environment_check()
         else:
-            # 如果文件不存在，进行环境检测
             self.run_environment_check()
 
     def init_ui(self):
-        # 主垂直布局
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
@@ -73,29 +69,26 @@ class WelcomeInterface(BaseInterface):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(10)
 
-        # 欢迎标题
         welcome_label = QLabel("欢迎使用合规工具箱", top_widget)
         welcome_font = QFont("Arial", 24, QFont.Bold)
         welcome_label.setFont(welcome_font)
         welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setStyleSheet("color: #333333;")  # 设置字体颜色
-
+        welcome_label.setStyleSheet("color: #333333;")
         top_layout.addWidget(welcome_label)
         top_widget.setLayout(top_layout)
 
-        # 功能介绍区域
+        # 中间功能简介
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout()
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(10)
 
-        # 功能简介
         functions = [
             {"name": "文档风险词汇批量检测", "description": "检测并标记文档中的风险词汇。"},
             {"name": "新游爬虫", "description": "爬取TapTap上的新游信息并匹配版号。"},
             {"name": "版号匹配", "description": "匹配游戏的版号信息。"},
             {"name": "词表对照", "description": "对照两个词表的差异。"},
-            {"name": "大模型语意分析", "description": "通过大模型审核文本，标记高风险内容。"},
+            {"name": "大模型语义分析", "description": "通过大模型审核文本，标记高风险内容。"},
             {"name": "大模型文案正向优化", "description": "通过大模型输出语句的正向优化。"},
             {"name": "设定", "description": "配置工具的相关设置。"}
         ]
@@ -105,13 +98,11 @@ class WelcomeInterface(BaseInterface):
             func_layout.setContentsMargins(0, 0, 0, 0)
             func_layout.setSpacing(10)
 
-            # 功能名称
             name_label = QLabel(func["name"])
             name_font = QFont("Arial", 12, QFont.Bold)
             name_label.setFont(name_font)
             name_label.setStyleSheet("color: #555555;")
 
-            # 功能描述
             desc_label = QLabel(func["description"])
             desc_font = QFont("Arial", 12)
             desc_label.setFont(desc_font)
@@ -127,11 +118,10 @@ class WelcomeInterface(BaseInterface):
 
         bottom_widget.setLayout(bottom_layout)
 
-        # 将顶部区域和功能介绍添加到主布局
         main_layout.addWidget(top_widget)
         main_layout.addWidget(bottom_widget)
 
-        # 添加分割线
+        # 分割线
         separator1 = QFrame()
         separator1.setFrameShape(QFrame.HLine)
         separator1.setFrameShadow(QFrame.Sunken)
@@ -139,23 +129,21 @@ class WelcomeInterface(BaseInterface):
         separator1.setFixedHeight(2)
         main_layout.addWidget(separator1)
 
-        # 检测并配置运行环境按钮和说明
+        # 检测环境按钮和说明
         env_layout = QHBoxLayout()
         self.check_env_button = QPushButton("检测并配置运行环境")
-        self.check_env_button.setFixedHeight(40)  # 增加按钮高度
-        self.check_env_button.setFixedWidth(200)   # 设置按钮宽度，不横跨整个界面
-        # 设置按钮字体为加粗
+        self.check_env_button.setFixedHeight(40)
+        self.check_env_button.setFixedWidth(200)
         font = QFont()
         font.setBold(True)
         self.check_env_button.setFont(font)
 
         self.check_env_button.clicked.connect(self.run_environment_check)
-        description_label = QLabel("每次运行软件时会自动检测运行环境,需安装微软Edge浏览器。")
+        description_label = QLabel("每次运行软件时会自动检测运行环境，需要已安装Edge浏览器。")
         description_label.setWordWrap(True)
         env_layout.addWidget(self.check_env_button)
         env_layout.addWidget(description_label)
         env_layout.addStretch()
-
         main_layout.addLayout(env_layout)
 
         # 信息输出区域
@@ -164,10 +152,13 @@ class WelcomeInterface(BaseInterface):
         self.output_text_edit.setPlaceholderText("信息输出区域")
         main_layout.addWidget(self.output_text_edit)
 
-        # 将主布局添加到界面
-        self.layout.addLayout(main_layout)
+        # 新增：使用QTreeWidget展示结构化检测结果
+        self.result_tree = QTreeWidget()
+        self.result_tree.setColumnCount(3)
+        self.result_tree.setHeaderLabels(["检测项", "是否通过", "详情"])
+        main_layout.addWidget(self.result_tree)
 
-        # 创建遮罩层
+        # 遮罩层
         self.overlay = QWidget(self)
         self.overlay.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
         self.overlay_layout = QVBoxLayout(self.overlay)
@@ -177,27 +168,26 @@ class WelcomeInterface(BaseInterface):
         self.overlay_layout.addWidget(self.overlay_label)
         self.overlay.hide()
 
+        self.layout.addLayout(main_layout)
+
     def resizeEvent(self, event):
-        """在窗口大小改变时，调整遮罩层的大小"""
         super().resizeEvent(event)
         self.overlay.resize(self.size())
 
     def run_environment_check(self):
-        """运行环境检查"""
-        # 禁用按钮，防止重复点击
+        """执行环境检测"""
         self.check_env_button.setEnabled(False)
-        # 显示遮罩层
         self.overlay.show()
-        # Emit signal that environment check is started
         self.environment_check_started.emit()
 
-        # 启动环境检查线程
         self.thread = QThread()
         self.environment_checker = EnvironmentChecker()
         self.environment_checker.moveToThread(self.thread)
 
         self.thread.started.connect(self.environment_checker.run)
         self.environment_checker.output_signal.connect(self.append_output)
+        # 结构化结果信号
+        self.environment_checker.structured_result_signal.connect(self.on_structured_results)
         self.environment_checker.finished.connect(self.on_check_finished)
         self.environment_checker.finished.connect(self.environment_checker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
@@ -205,30 +195,33 @@ class WelcomeInterface(BaseInterface):
         self.thread.start()
 
     def append_output(self, message):
-        """在信息输出区域追加消息"""
         self.output_text_edit.append(message)
 
+    def on_structured_results(self, results):
+        """将结果填入QTreeWidget"""
+        self.result_tree.clear()
+        for item_name, status_bool, detail in results:
+            # 每个检测项生成一个QTreeWidgetItem
+            row = QTreeWidgetItem(self.result_tree)
+            row.setText(0, item_name)
+            row.setText(1, "通过" if status_bool else "未通过")
+            row.setText(2, detail if detail else "")
+        self.result_tree.expandAll()
+
     def on_check_finished(self, has_errors):
-        """环境检测完成后"""
-        # 启用按钮
         self.check_env_button.setEnabled(True)
-        # 隐藏遮罩层
         self.overlay.hide()
-        # Emit signal that environment check is finished, passing whether there were errors
         self.environment_check_finished.emit(has_errors)
+
         # 获取当前日期
         current_date = datetime.now().strftime("%Y-%m-%d")
-        # 记录结果到文件
         self.record_env_check_result(current_date, not has_errors)
-        # 根据检测结果给出提示
+
         if has_errors:
-            message = f"{current_date} 检测运行环境为不通过，建议再次检测或获取帮助！"
-            self.append_output("环境检测过程中存在问题，请根据提示进行处理。")
+            self.output_text_edit.append("环境检测存在问题，请根据提示进行处理。")
         else:
-            message = f"{current_date} 检测运行环境为通过，可直接使用，如遇问题可再次检测！"
-            self.append_output("恭喜，环境检测和配置完成！")
-        # 在信息输出区域显示提示
-        self.output_text_edit.append(message)
+            self.output_text_edit.append("恭喜，环境检测和配置完成！")
+
         # 线程清理
         self.thread.quit()
         self.thread.wait()
@@ -236,13 +229,12 @@ class WelcomeInterface(BaseInterface):
         self.environment_checker = None
 
     def record_env_check_result(self, date_str, result):
-        """记录环境检测结果到文件"""
         data = {
             "date": date_str,
-            "result": result  # True 表示通过，False 表示不通过
+            "result": result
         }
         try:
             with open(self.env_result_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            self.append_output(f"记录环境检测结果失败：{str(e)}")
+            self.output_text_edit.append(f"记录环境检测结果失败：{str(e)}")
