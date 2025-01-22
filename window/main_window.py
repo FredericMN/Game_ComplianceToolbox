@@ -1,5 +1,3 @@
-# window/main_window.py
-
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QStackedWidget, QMessageBox
 from PySide6.QtGui import QIcon
 from qfluentwidgets import (
@@ -33,6 +31,7 @@ from utils.version_checker import VersionChecker, VersionCheckWorker
 from interfaces.large_model_optimization_interface import LargeModelOptimizationInterface
 from PySide6.QtCore import QThread
 
+
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
@@ -41,13 +40,14 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+
 class MainWindow(FramelessWindow):
     def __init__(self):
         super().__init__()
         self.setTitleBar(StandardTitleBar(self))
         self.setWindowTitle("合规工具箱")
-        self.setWindowIcon(QIcon(resource_path('resources/logo.ico')))  # 确保 resource_path 在此之前定义
-        self.update_thread = None  # 初始化更新线程
+        self.setWindowIcon(QIcon(resource_path('resources/logo.ico')))
+        self.update_thread = None
 
         # 主布局
         self.hBoxLayout = QHBoxLayout(self)
@@ -58,16 +58,16 @@ class MainWindow(FramelessWindow):
         self.welcomeInterface = WelcomeInterface(self)
         self.detectionToolInterface = DetectionToolInterface(self)
         self.crawlerInterface = CrawlerInterface(self)
-        self.vocabularyComparisonInterface = VocabularyComparisonInterface(self)  # 实例化新的界面
+        self.vocabularyComparisonInterface = VocabularyComparisonInterface(self)
         self.largeModelInterface = LargeModelInterface(self)
-        self.developingInterface = EmptyInterface(parent=self)  # 修改此行
+        self.developingInterface = EmptyInterface(parent=self)
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
         self.largeModelOptimizationInterface = LargeModelOptimizationInterface(self)
 
         # 初始时禁用导航栏
         self.set_navigation_enabled(False)
-        
+
         # 连接信号
         self.setup_connections()
 
@@ -82,13 +82,15 @@ class MainWindow(FramelessWindow):
     def setup_connections(self):
         """设置信号连接，确保只执行一次"""
         if not hasattr(self, '_connections_established') or not self._connections_established:
-            # 连接信号
+            # 连接环境检测相关信号
             self.welcomeInterface.environment_check_started.connect(
                 lambda: self.set_navigation_enabled(False)
             )
             self.welcomeInterface.environment_check_finished.connect(
                 self.on_environment_check_finished
             )
+            # 连接卡片点击信号
+            self.welcomeInterface.card_clicked.connect(self.on_card_clicked)
             self._connections_established = True
 
     def init_layout(self):
@@ -106,27 +108,27 @@ class MainWindow(FramelessWindow):
 
         # 添加其他主导航项 - 使用与功能卡片匹配的图标
         self.add_sub_interface(
-            self.detectionToolInterface, FIF.SEARCH, "文档风险词汇批量检测"  # 搜索图标对应🔍
+            self.detectionToolInterface, FIF.SEARCH, "文档风险词汇批量检测"
         )
 
         self.add_sub_interface(
-            self.crawlerInterface, FIF.GAME, "新游爬虫"  # 游戏图标对应🎮
+            self.crawlerInterface, FIF.GAME, "新游爬虫"
         )
 
         self.add_sub_interface(
-            self.versionMatchingInterface, FIF.CERTIFICATE, "版号匹配"  # 证书图标对应📋
+            self.versionMatchingInterface, FIF.CERTIFICATE, "版号匹配"
         )
 
         self.add_sub_interface(
-            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"  # 文档图标对应�
+            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"
         )
 
         self.add_sub_interface(
-            self.largeModelInterface, FIF.ROBOT, "大模型语义分析"  # 机器人图标对应🤖
+            self.largeModelInterface, FIF.ROBOT, "大模型语义分析"
         )
 
         self.add_sub_interface(
-            self.largeModelOptimizationInterface, FIF.DATE_TIME, "大模型文案正向优化"  # 时间图标对应🕒
+            self.largeModelOptimizationInterface, FIF.DATE_TIME, "大模型文案正向优化"
         )
 
         self.add_sub_interface(
@@ -137,7 +139,7 @@ class MainWindow(FramelessWindow):
         self.navigationInterface.addSeparator()
 
         self.add_sub_interface(
-            self.settingsInterface, FIF.SETTING, "设定",  # 设置图标对应⚙️
+            self.settingsInterface, FIF.SETTING, "设定",
             position=NavigationItemPosition.BOTTOM
         )
 
@@ -176,7 +178,7 @@ class MainWindow(FramelessWindow):
     def on_environment_check_finished(self, has_errors, is_new_check=True):
         """处理环境检测完成后的逻辑"""
         self.set_navigation_enabled(True)
-        
+
         # 只在新的检测完成时才显示弹窗和检查更新
         if is_new_check:
             if has_errors:
@@ -232,3 +234,17 @@ class MainWindow(FramelessWindow):
     def delayed_environment_check(self):
         """已废弃，使用 check_environment_status 替代"""
         pass
+
+    def on_card_clicked(self, name):
+        """处理卡片点击事件，切换到对应的界面"""
+        interface_mapping = {
+            "文档风险词汇批量检测": self.detectionToolInterface,
+            "新游爬虫": self.crawlerInterface,
+            "版号匹配": self.versionMatchingInterface,
+            "词表对照": self.vocabularyComparisonInterface,
+            "大模型语义分析": self.largeModelInterface,
+            "大模型文案正向优化": self.largeModelOptimizationInterface,
+            "设定": self.settingsInterface
+        }
+        if name in interface_mapping:
+            self.switch_to(interface_mapping[name])

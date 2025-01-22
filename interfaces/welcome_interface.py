@@ -1,5 +1,3 @@
-# interfaces/welcome_interface.py
-
 import os
 import sys
 import json
@@ -9,7 +7,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QTreeWidget, QTreeWidgetItem, QScrollArea
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from .base_interface import BaseInterface
+from.base_interface import BaseInterface
 from PySide6.QtGui import QFont, QIcon, QColor, QPalette
 from utils.environment_checker import EnvironmentChecker
 
@@ -19,6 +17,8 @@ class WelcomeInterface(BaseInterface):
 
     environment_check_started = Signal()
     environment_check_finished = Signal(bool, bool)  # (has_errors, is_new_check)
+    card_clicked = Signal(str)  # 新增信号，用于发送点击的卡片名称
+    is_checking_env = False  # 新增标志，用于记录是否正在进行环境检测
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,24 +44,24 @@ class WelcomeInterface(BaseInterface):
             try:
                 with open(self.env_result_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                date_str = data.get('date')
-                result = data.get('result')
-                
-                if date_str and (result is not None):
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    if result:
-                        message = f"[{timestamp}] {date_str} 检测环境：通过。可直接使用。如遇问题可再次检测！"
-                        # 如果检测通过，启用导航栏，但不触发弹窗
-                        self.environment_check_finished.emit(False, False)
-                    else:
-                        message = f"[{timestamp}] {date_str} 检测环境：不通过。建议再次检测或获取帮助！"
-                        # 如果检测不通过，保持导航栏禁用状态
-                        self.environment_check_finished.emit(True, False)
-                    self.output_text_edit.append(message)
-                    return True
+                    date_str = data.get('date')
+                    result = data.get('result')
+
+                    if date_str and (result is not None):
+                        timestamp = datetime.now().strftime("%H:%M:%S")
+                        if result:
+                            message = f"[{timestamp}] {date_str} 检测环境：通过。可直接使用。如遇问题可再次检测！"
+                            # 如果检测通过，启用导航栏，但不触发弹窗
+                            self.environment_check_finished.emit(False, False)
+                        else:
+                            message = f"[{timestamp}] {date_str} 检测环境：不通过。建议再次检测或获取帮助！"
+                            # 如果检测不通过，保持导航栏禁用状态
+                            self.environment_check_finished.emit(True, False)
+                        self.output_text_edit.append(message)
+                        return True
             except Exception as e:
                 self.output_text_edit.append(f"[{datetime.now().strftime('%H:%M:%S')}] 读取检测结果失败，需要重新检测。错误信息：{str(e)}")
-        
+
         # 如果没有历史记录或读取失败，则进行新的检测
         self.run_environment_check()
         return False
@@ -92,7 +92,7 @@ class WelcomeInterface(BaseInterface):
         """)
         welcome_layout = QVBoxLayout(welcome_widget)
         welcome_layout.setContentsMargins(10, 5, 10, 5)
-        
+
         welcome_label = QLabel("欢迎使用合规工具箱")
         welcome_label.setStyleSheet("""
             QLabel {
@@ -112,7 +112,7 @@ class WelcomeInterface(BaseInterface):
             QWidget {
                 background-color: white;
                 border-radius: 10px;
-                padding: 8px;  /* 减小内边距 */
+                padding: 8px; /* 减小内边距 */
             }
         """)
         functions_grid = QHBoxLayout(functions_widget)
@@ -124,7 +124,7 @@ class WelcomeInterface(BaseInterface):
         right_column = QVBoxLayout()
         left_column.setSpacing(4)  # 减小行间距
         right_column.setSpacing(4)  # 减小行间距
-        
+
         functions = [
             {"name": "文档风险词汇批量检测", "description": "检测并标记文档中的风险词汇。", "icon": "🔍"},
             {"name": "新游爬虫", "description": "爬取TapTap上的新游信息并匹配版号。", "icon": "🕷️"},
@@ -138,37 +138,53 @@ class WelcomeInterface(BaseInterface):
         # 功能卡片样式调整
         for i, func in enumerate(functions):
             card = QWidget()
+            card.setObjectName("functionCard")  # 添加对象名，用于样式表识别
             card.setStyleSheet("""
-                QWidget {
+                QWidget#functionCard {
                     background-color: #f8f9fa;
                     border-radius: 8px;
-                    padding: 4px 6px;  /* 减小上下内边距，保持左右内边距 */
+                    padding: 4px 6px;
                     margin: 1px;
                 }
+                QWidget#functionCard:hover {
+                    background-color: #e9ecef;
+                }
+                QWidget#functionCard[disabled="true"] {
+                    background-color: #f8f9fa;
+                }
+                QLabel {
+                    background: transparent;  /* 确保标签背景透明 */
+                }
             """)
+            # 使用 setCursor 来设置鼠标指针样式
+            card.setCursor(Qt.PointingHandCursor)
+
             card_layout = QHBoxLayout(card)
-            card_layout.setContentsMargins(6, 4, 6, 4)  # 减小上下边距
+            card_layout.setContentsMargins(6, 4, 6, 4)
             card_layout.setSpacing(8)
 
             icon_label = QLabel(func["icon"])
             icon_label.setStyleSheet("""
                 QLabel {
-                    font-size: 20px;  /* 增大图标 */
+                    font-size: 20px;
                     min-width: 30px;
+                    background: transparent;
                 }
             """)
 
             text_widget = QWidget()
+            text_widget.setStyleSheet("background: transparent;")  # 确保背景透明
             text_layout = QVBoxLayout(text_widget)
-            text_layout.setSpacing(0)  # 最小化标题和描述间距
-            text_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
+            text_layout.setSpacing(0)
+            text_layout.setContentsMargins(0, 0, 0, 0)
 
             name_label = QLabel(func["name"])
             name_label.setStyleSheet("""
                 QLabel {
                     color: #2c3e50;
-                    font-size: 14px;  /* 增大标题字体 */
+                    font-size: 14px;
                     font-weight: bold;
+                    background: transparent;
                 }
             """)
 
@@ -176,7 +192,8 @@ class WelcomeInterface(BaseInterface):
             desc_label.setStyleSheet("""
                 QLabel {
                     color: #7f8c8d;
-                    font-size: 12px;  /* 增大描述字体 */
+                    font-size: 12px;
+                    background: transparent;
                 }
             """)
             desc_label.setWordWrap(True)
@@ -186,6 +203,15 @@ class WelcomeInterface(BaseInterface):
 
             card_layout.addWidget(icon_label)
             card_layout.addWidget(text_widget, 1)
+
+            # 为卡片添加点击事件
+            card.mousePressEvent = lambda event, name=func["name"]: self.on_card_clicked(name)
+            
+            # 存储卡片引用以便后续控制
+            card.setProperty("disabled", False)  # 添加禁用状态属性
+            if not hasattr(self, 'function_cards'):
+                self.function_cards = []
+            self.function_cards.append(card)
 
             if i % 2 == 0:
                 left_column.addWidget(card)
@@ -321,20 +347,27 @@ class WelcomeInterface(BaseInterface):
 
     def run_environment_check(self):
         """执行环境检测"""
-        # 如果已有检测在进行，直接返回
         if hasattr(self, 'thread') and self.thread and self.thread.isRunning():
             return
 
+        self.is_checking_env = True
         self.check_env_button.setEnabled(False)
         self.environment_check_started.emit()
         self.overlay.show()
-        
+
+        # 禁用所有功能卡片
+        if hasattr(self, 'function_cards'):
+            for card in self.function_cards:
+                card.setProperty("disabled", True)
+                card.setCursor(Qt.ArrowCursor)  # 设置为默认鼠标指针
+                card.setStyle(card.style())  # 刷新样式
+
         # 创建新的线程和工作对象
         self.thread = QThread()
         self.environment_checker = EnvironmentChecker()
         self.environment_checker.moveToThread(self.thread)
 
-        # 每次都重新连接信号
+        # 连接信号
         self.thread.started.connect(self.environment_checker.run)
         self.environment_checker.output_signal.connect(self.append_output)
         self.environment_checker.structured_result_signal.connect(self.on_structured_results)
@@ -348,20 +381,20 @@ class WelcomeInterface(BaseInterface):
         if self.thread:
             self.thread.quit()
             self.thread.wait()
-            
-            # 断开所有信号连接
-            try:
-                self.thread.started.disconnect()
-                self.environment_checker.output_signal.disconnect()
-                self.environment_checker.structured_result_signal.disconnect()
-                self.environment_checker.finished.disconnect()
-            except:
-                pass
-            
-            self.thread.deleteLater()
-            self.environment_checker.deleteLater()
-            self.thread = None
-            self.environment_checker = None
+
+        # 断开所有信号连接
+        try:
+            self.thread.started.disconnect()
+            self.environment_checker.output_signal.disconnect()
+            self.environment_checker.structured_result_signal.disconnect()
+            self.environment_checker.finished.disconnect()
+        except:
+            pass
+
+        self.thread.deleteLater()
+        self.environment_checker.deleteLater()
+        self.thread = None
+        self.environment_checker = None
 
     def append_output(self, message):
         """优化输出信息显示"""
@@ -379,16 +412,24 @@ class WelcomeInterface(BaseInterface):
 
     def on_check_finished(self, has_errors):
         """检测完成的处理"""
+        self.is_checking_env = False
         self.check_env_button.setEnabled(True)
         self.overlay.hide()
-        
+
+        # 启用所有功能卡片
+        if hasattr(self, 'function_cards'):
+            for card in self.function_cards:
+                card.setProperty("disabled", False)
+                card.setCursor(Qt.PointingHandCursor)  # 恢复指针手型
+                card.setStyle(card.style())  # 刷新样式
+
         # 获取当前日期并记录结果
         current_date = datetime.now().strftime("%Y-%m-%d")
         self.record_env_check_result(current_date, not has_errors)
-        
+
         # 发送信号
         self.environment_check_finished.emit(has_errors, True)
-        
+
         # 清理资源
         self.cleanup_check()
 
@@ -402,3 +443,8 @@ class WelcomeInterface(BaseInterface):
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
             self.output_text_edit.append(f"记录环境检测结果失败：{str(e)}")
+
+    def on_card_clicked(self, name):
+        """处理卡片点击事件"""
+        if not self.is_checking_env:  # 只有在非检测状态下才处理点击事件
+            self.card_clicked.emit(name)
