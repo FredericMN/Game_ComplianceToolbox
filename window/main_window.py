@@ -247,4 +247,7 @@ class MainWindow(FramelessWindow):
             "设定": self.settingsInterface
         }
         if name in interface_mapping:
-            self.switch_to(interface_mapping[name])
+            target_interface = interface_mapping[name]
+            self.switch_to(target_interface)
+            # 更新导航栏选中状态
+            self.navigationInterface.setCurrentItem(target_interface.__class__.__name__)
