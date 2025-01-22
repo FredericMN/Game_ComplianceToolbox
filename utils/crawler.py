@@ -31,9 +31,22 @@ def random_delay(min_sec=0.5, max_sec=1.5):
     """避免爬取过快"""
     time.sleep(random.uniform(min_sec, max_sec))
 
+def safe_execute(func):
+    """装饰器统一处理异常"""
+    def wrapper(*args, progress_callback=None, **kwargs):
+        try:
+            return func(*args, progress_callback=progress_callback, **kwargs)
+        except Exception as e:
+            progress_log_callback(progress_callback, f"执行出错: {str(e)}")
+            if 'progress_percent_callback' in kwargs:
+                kwargs['progress_percent_callback'](100, 0)
+            return None
+    return wrapper
+
 # -----------------------------------------------------------------------------
 # 新游爬虫
 # -----------------------------------------------------------------------------
+@safe_execute
 def crawl_new_games(
     start_date_str,
     end_date_str,

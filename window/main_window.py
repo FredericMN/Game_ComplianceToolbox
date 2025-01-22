@@ -8,6 +8,7 @@ from qfluentwidgets import (
 from qframelesswindow import FramelessWindow, StandardTitleBar
 import os
 import sys
+from PySide6.QtCore import QTimer
 
 # 将本地库路径添加到 sys.path 以确保本地安装的库被优先导入
 local_libs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'local_libs')
@@ -64,17 +65,31 @@ class MainWindow(FramelessWindow):
         self.versionMatchingInterface = VersionMatchingInterface(self)
         self.largeModelOptimizationInterface = LargeModelOptimizationInterface(self)
 
+        # 初始时禁用导航栏
+        self.set_navigation_enabled(False)
+        
+        # 连接信号
+        self.setup_connections()
+
+        # 使用 QTimer 延迟执行环境状态检查
+        QTimer.singleShot(500, self.check_environment_status)
+
         # 初始化布局和导航栏
         self.init_layout()
         self.init_navigation()
         self.init_window()
 
-        # 连接 WelcomeInterface 的信号以控制导航栏
-        self.welcomeInterface.environment_check_started.connect(lambda: self.set_navigation_enabled(False))
-        self.welcomeInterface.environment_check_finished.connect(self.on_environment_check_finished)
-
-        # 启动环境检测
-        # self.welcomeInterface.run_environment_check()
+    def setup_connections(self):
+        """设置信号连接，确保只执行一次"""
+        if not hasattr(self, '_connections_established') or not self._connections_established:
+            # 连接信号
+            self.welcomeInterface.environment_check_started.connect(
+                lambda: self.set_navigation_enabled(False)
+            )
+            self.welcomeInterface.environment_check_finished.connect(
+                self.on_environment_check_finished
+            )
+            self._connections_established = True
 
     def init_layout(self):
         self.hBoxLayout.setSpacing(0)
@@ -89,41 +104,40 @@ class MainWindow(FramelessWindow):
             self.welcomeInterface, FIF.HOME, "欢迎页"
         )
 
-        # 添加其他主导航项
+        # 添加其他主导航项 - 使用与功能卡片匹配的图标
         self.add_sub_interface(
-            self.detectionToolInterface, FIF.EDIT, "文档风险词汇批量检测"
+            self.detectionToolInterface, FIF.SEARCH, "文档风险词汇批量检测"  # 搜索图标对应🔍
         )
 
         self.add_sub_interface(
-            self.crawlerInterface, FIF.GAME, "新游爬虫"
+            self.crawlerInterface, FIF.GAME, "新游爬虫"  # 游戏图标对应🎮
         )
 
         self.add_sub_interface(
-            self.versionMatchingInterface, FIF.CAFE, "版号匹配"
+            self.versionMatchingInterface, FIF.CERTIFICATE, "版号匹配"  # 证书图标对应📋
         )
 
         self.add_sub_interface(
-            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"
+            self.vocabularyComparisonInterface, FIF.DOCUMENT, "词表对照"  # 文档图标对应�
         )
 
         self.add_sub_interface(
-            self.largeModelInterface, FIF.PROJECTOR, "大模型语义分析"
-        )
-
-        # 添加新界面到导航栏
-        self.add_sub_interface(
-            self.largeModelOptimizationInterface, FIF.DATE_TIME, "大模型文案正向优化"
+            self.largeModelInterface, FIF.ROBOT, "大模型语义分析"  # 机器人图标对应🤖
         )
 
         self.add_sub_interface(
-            self.developingInterface, FIF.CODE, "新功能开发中"
+            self.largeModelOptimizationInterface, FIF.DATE_TIME, "大模型文案正向优化"  # 时间图标对应🕒
         )
 
-        # 在导航栏底部添加“设定”项
+        self.add_sub_interface(
+            self.developingInterface, FIF.DEVELOPER_TOOLS, "新功能开发中"
+        )
+
+        # 在导航栏底部添加"设定"项
         self.navigationInterface.addSeparator()
 
         self.add_sub_interface(
-            self.settingsInterface, FIF.SETTING, "设定",
+            self.settingsInterface, FIF.SETTING, "设定",  # 设置图标对应⚙️
             position=NavigationItemPosition.BOTTOM
         )
 
@@ -159,15 +173,18 @@ class MainWindow(FramelessWindow):
         """启用或禁用导航栏"""
         self.navigationInterface.setEnabled(enabled)
 
-    def on_environment_check_finished(self, has_errors):
+    def on_environment_check_finished(self, has_errors, is_new_check=True):
         """处理环境检测完成后的逻辑"""
         self.set_navigation_enabled(True)
-        if has_errors:
-            QMessageBox.warning(self, "环境检测", "环境检测过程中存在问题，请根据提示进行处理。")
-        else:
-            QMessageBox.information(self, "环境检测", "恭喜，环境检测和配置完成！")
-        # 在环境检测完成后，启动版本检测
-        self.check_for_updates()
+        
+        # 只在新的检测完成时才显示弹窗和检查更新
+        if is_new_check:
+            if has_errors:
+                QMessageBox.warning(self, "环境检测", "环境检测过程中存在问题，请根据提示进行处理。")
+            else:
+                QMessageBox.information(self, "环境检测", "恭喜，环境检测和配置完成！")
+                # 只在检测通过时才检查更新
+                self.check_for_updates()
 
     def check_for_updates(self):
         # 如果已有线程在运行，先停止
@@ -205,3 +222,13 @@ class MainWindow(FramelessWindow):
                 self.switch_to(self.settingsInterface)
                 # 开始下载和更新过程
                 self.settingsInterface.handle_check_update()
+
+    def check_environment_status(self):
+        """检查环境状态"""
+        if hasattr(self, 'welcomeInterface'):
+            # 只调用状态检查，不直接进行环境检测
+            self.welcomeInterface.check_env_status()
+
+    def delayed_environment_check(self):
+        """已废弃，使用 check_environment_status 替代"""
+        pass
