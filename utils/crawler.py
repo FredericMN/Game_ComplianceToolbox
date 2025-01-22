@@ -55,8 +55,8 @@ def crawl_new_games(
     progress_percent_callback=None
 ):
     """
-    1. 无“序号”列；列头: [ "日期", "游戏名称", "状态", "厂商", "类型", "评分" ]
-    2. 分天并发，每日爬完就输出并写到 Excel，但最终爬完后，再做一次“按日期升序”全表排序。
+    1. 无"序号"列；列头: [ "日期", "游戏名称", "状态", "厂商", "类型", "评分" ]
+    2. 分天并发，每日爬完就输出并写到 Excel，但最终爬完后，再做一次"按日期升序"全表排序。
     3. 若 enable_version_match=True，则自动在同一个 Excel 里匹配版号并存储（不改名/不另存）。
     """
 
@@ -100,7 +100,7 @@ def crawl_new_games(
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title="游戏数据"
-    ws.append(["日期","游戏名称","状态","厂商","类型","评分"])  # 无“序号”
+    ws.append(["日期","游戏名称","状态","厂商","类型","评分"])  # 无"序号"
     wb.save(excel_filename)
 
     progress_log_callback(progress_callback,
@@ -110,28 +110,36 @@ def crawl_new_games(
         """
         返回 (day_str, [ (name, status, man, types, rating) ])，若结构异常 => raise RuntimeError
         """
-        day_str=d.strftime("%Y-%m-%d")
+        day_str = d.strftime("%Y-%m-%d")
         opt = webdriver.EdgeOptions()
-        driver=webdriver.Edge(
+        driver = webdriver.Edge(
             service=EdgeService(EdgeChromiumDriverManager().install()),
             options=opt
         )
-        results=[]
+        results = []
         try:
-            url=f"https://www.taptap.cn/app-calendar/{day_str}"
+            url = f"https://www.taptap.cn/app-calendar/{day_str}"
             driver.get(url)
+            
+            # 修改：先等待页面加载完成
             try:
-                WebDriverWait(driver,10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR,
-                        "div.daily-event-list__content > a.tap-router"))
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 
+                        "div.daily-event-list__content"))
                 )
             except:
                 raise RuntimeError("网页结构疑似存在更新变动，请联系开发者进行解决。")
 
+            # 查找游戏元素
             games = driver.find_elements(
                 By.CSS_SELECTOR,
                 "div.daily-event-list__content > a.tap-router"
             )
+            
+            # 如果没有游戏，直接返回空列表
+            if not games:
+                return (day_str, [])
+
             for g in games:
                 random_delay()
                 try:
@@ -247,7 +255,7 @@ def crawl_new_games(
                 val=int(completed*100/total_dates)
                 progress_percent_callback(val,0)
 
-    # 全部爬完后 => 对整个Excel按“日期”升序排序
+    # 全部爬完后 => 对整个Excel按"日期"升序排序
     final_wb=openpyxl.load_workbook(excel_filename)
     final_ws=final_wb.active
     data_rows=list(final_ws.values)
