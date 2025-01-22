@@ -42,21 +42,35 @@ class EnvironmentChecker(QObject):
         self.structured_results = []
 
     def run(self):
-        """依次执行所有检测项，可考虑并发，但量少时顺序即可。"""
-        for item_name, func in self.check_items:
+        """增加重试机制"""
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count < max_retries:
             try:
-                self.output_signal.emit(f"开始检测：{item_name} ...")
-                ok, detail = func()  # 执行检测项，返回(bool, str)
-                if not ok:
-                    self.has_errors = True
-                self.structured_results.append((item_name, ok, detail))
+                for item_name, func in self.check_items:
+                    self.output_signal.emit(f"开始检测：{item_name} ...")
+                    ok, detail = func()
+                    if not ok:
+                        self.has_errors = True
+                    self.structured_results.append((item_name, ok, detail))
+                    
+                if not self.has_errors:
+                    break
+                
+                retry_count += 1
+                if retry_count < max_retries:
+                    self.output_signal.emit("检测未通过，正在重试...")
+                    time.sleep(2)  # 等待2秒后重试
+                    self.structured_results = []  # 清空之前的结果
+                    self.has_errors = False
+                    
             except Exception as e:
                 self.has_errors = True
                 detail_msg = f"检测过程中出现异常: {str(e)}"
                 self.output_signal.emit(detail_msg)
-                self.structured_results.append((item_name, False, detail_msg))
+                break
 
-        # 发射结构化结果
         self.structured_result_signal.emit(self.structured_results)
         self.finished.emit(self.has_errors)
 
