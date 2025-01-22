@@ -71,81 +71,29 @@ class DetectionToolInterface(BaseInterface):
         self.thread = None  # 初始化线程引用
 
     def init_ui(self):
-        # 设置整体背景色
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #f5f6fa;
-            }
-        """)
-
         # 创建一个容器widget来包含所有内容
         container = QWidget()
-        container.setStyleSheet("""
-            QWidget {
-                background-color: white;
-                border-radius: 10px;
-                padding: 15px;
-            }
-        """)
         container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(15)
-        container_layout.setContentsMargins(15, 15, 15, 15)
+        container_layout.setSpacing(10)
+        container_layout.setContentsMargins(10, 10, 10, 10)
 
         # 顶部布局，包含两个输入区域
         top_layout = QHBoxLayout()
-        top_layout.setSpacing(15)
+        top_layout.setSpacing(10)
 
         # 左侧输入区域
         left_input_layout = QVBoxLayout()
         left_label = QLabel("血腥暴力词汇（用逗号分隔）")
-        left_label.setStyleSheet("""
-            QLabel {
-                color: #2c3e50;
-                font-size: 14px;
-                font-weight: bold;
-                margin-bottom: 5px;
-            }
-        """)
         self.left_text_edit = QTextEdit()
-        self.left_text_edit.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 10px;
-                background-color: #f8f9fa;
-                color: #2c3e50;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-        """)
         self.left_text_edit.setPlaceholderText("请输入血腥暴力词汇，用逗号分隔")
         self.left_text_edit.setText(','.join(self.violent_words))
         left_input_layout.addWidget(left_label)
         left_input_layout.addWidget(self.left_text_edit)
 
-        # 右侧输入区域样式相同
+        # 右侧输入区域
         right_input_layout = QVBoxLayout()
         right_label = QLabel("不良诱导词汇（用逗号分隔）")
-        right_label.setStyleSheet("""
-            QLabel {
-                color: #2c3e50;
-                font-size: 14px;
-                font-weight: bold;
-                margin-bottom: 5px;
-            }
-        """)
         self.right_text_edit = QTextEdit()
-        self.right_text_edit.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 10px;
-                background-color: #f8f9fa;
-                color: #2c3e50;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-        """)
         self.right_text_edit.setPlaceholderText("请输入不良诱导词汇，用逗号分隔")
         self.right_text_edit.setText(','.join(self.inducing_words))
         right_input_layout.addWidget(right_label)
@@ -158,95 +106,23 @@ class DetectionToolInterface(BaseInterface):
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(10)
         
-        button_style = """
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 20px;
-                font-weight: bold;
-                font-size: 14px;
-                min-width: 160px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-            QPushButton:pressed {
-                background-color: #2573a7;
-            }
-            QPushButton:disabled {
-                background-color: #bdc3c7;
-            }
-        """
-        
         self.update_button = QPushButton("更新并保存词汇列表")
-        self.update_button.setStyleSheet(button_style)
         self.select_button = QPushButton("选择文件并检测")
-        self.select_button.setStyleSheet(button_style)
         buttons_layout.addWidget(self.update_button)
         buttons_layout.addWidget(self.select_button)
 
-        # 进度条样式
+        # 进度条
         self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #e0e0e0;
-                border-radius: 5px;
-                text-align: center;
-                background-color: #f8f9fa;
-                height: 20px;
-            }
-            QProgressBar::chunk {
-                background-color: #3498db;
-                border-radius: 5px;
-            }
-        """)
         self.progress_bar.setVisible(False)
 
         # 结果输出区域
         result_label = QLabel("结果输出区域")
-        result_label.setStyleSheet("""
-            QLabel {
-                color: #2c3e50;
-                font-size: 14px;
-                font-weight: bold;
-                margin-top: 10px;
-            }
-        """)
-        
         self.result_list_widget = QListWidget()
-        self.result_list_widget.setStyleSheet("""
-            QListWidget {
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                padding: 5px;
-                background-color: #f8f9fa;
-                color: #2c3e50;
-                font-size: 12px;
-            }
-            QListWidget::item {
-                padding: 5px;
-                border-bottom: 1px solid #e0e0e0;
-            }
-            QListWidget::item:last {
-                border-bottom: none;
-            }
-        """)
 
         # 说明标签
         explanation_label = QLabel(
             "说明：仅支持Word文档与Excel表格进行批量检测，其中【血腥暴力】风险词汇标记为红色，【不良诱导】风险词汇标记为绿色。"
         )
-        explanation_label.setStyleSheet("""
-            QLabel {
-                color: #7f8c8d;
-                font-size: 12px;
-                padding: 10px;
-                background-color: #f8f9fa;
-                border-radius: 8px;
-            }
-        """)
         explanation_label.setWordWrap(True)
 
         # 将各个布局添加到容器布局
