@@ -44,7 +44,6 @@ class EnvironmentChecker(QObject):
         ]
 
     def run(self):
-<<<<<<< HEAD
         """依次执行所有检测项，可考虑并发，但量少时顺序即可。"""
         # 确保每次运行前清空结果列表
         self.structured_results = []
@@ -125,39 +124,6 @@ class EnvironmentChecker(QObject):
         
         if terminated_count > 0 or failed_count > 0:
             self.output_signal.emit(f"清理完成: 已终止 {terminated_count} 个msedgedriver进程, 失败 {failed_count} 个进程")
-=======
-        """增加重试机制"""
-        max_retries = 2
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                for item_name, func in self.check_items:
-                    self.output_signal.emit(f"开始检测：{item_name} ...")
-                    ok, detail = func()
-                    if not ok:
-                        self.has_errors = True
-                    self.structured_results.append((item_name, ok, detail))
-                    
-                if not self.has_errors:
-                    break
-                
-                retry_count += 1
-                if retry_count < max_retries:
-                    self.output_signal.emit("检测未通过，正在重试...")
-                    time.sleep(2)  # 等待2秒后重试
-                    self.structured_results = []  # 清空之前的结果
-                    self.has_errors = False
-                    
-            except Exception as e:
-                self.has_errors = True
-                detail_msg = f"检测过程中出现异常: {str(e)}"
-                self.output_signal.emit(detail_msg)
-                break
-
-        self.structured_result_signal.emit(self.structured_results)
-        self.finished.emit(self.has_errors)
->>>>>>> 79605118dcf5a6a6197f5cf20a3439c6a47db93d
 
     def check_network(self):
         """检测网络连接"""

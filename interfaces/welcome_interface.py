@@ -384,7 +384,6 @@ class WelcomeInterface(BaseInterface):
 
     def cleanup_check(self):
         """清理检测相关资源"""
-<<<<<<< HEAD
         if self.thread and self.thread.isRunning():
             try:
                 # 先把对象引用保存下来
@@ -428,41 +427,6 @@ class WelcomeInterface(BaseInterface):
                     self.output_text_edit.append(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
             except Exception as e:
                 self.output_text_edit.append(f"[错误] 清理资源时出错: {str(e)}")
-=======
-        try:
-            if self.thread and self.thread.isRunning():
-                self.thread.quit()
-                self.thread.wait()
-
-                # 断开所有信号连接
-                if hasattr(self.environment_checker, 'output_signal'):
-                    try:
-                        self.environment_checker.output_signal.disconnect()
-                    except:
-                        pass
-                if hasattr(self.environment_checker, 'structured_result_signal'):
-                    try:
-                        self.environment_checker.structured_result_signal.disconnect()
-                    except:
-                        pass
-                if hasattr(self.environment_checker, 'finished'):
-                    try:
-                        self.environment_checker.finished.disconnect()
-                    except:
-                        pass
-
-                # 安全删除对象
-                if self.thread:
-                    self.thread.deleteLater()
-                if self.environment_checker:
-                    self.environment_checker.deleteLater()
-
-        except Exception as e:
-            print(f"清理资源时出现异常: {str(e)}")
-        finally:
-            self.thread = None
-            self.environment_checker = None
->>>>>>> 79605118dcf5a6a6197f5cf20a3439c6a47db93d
 
     def append_output(self, message):
         """优化输出信息显示"""
