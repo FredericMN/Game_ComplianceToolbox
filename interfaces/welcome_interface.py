@@ -39,14 +39,20 @@ class WelcomeInterface(BaseInterface):
         return os.path.join(CURRENT_DIR, 'env_check_result.json')
 
     def check_env_status(self):
-        """检查环境状态，如果有历史记录则直接显示，否则进行新的检测"""
+        """检查环境状态，增加缓存时间限制"""
         if os.path.exists(self.env_result_file):
             try:
                 with open(self.env_result_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     date_str = data.get('date')
                     result = data.get('result')
-
+                    check_time = datetime.strptime(date_str, "%Y-%m-%d")
+                    
+                    # 如果检测结果超过7天，重新检测
+                    if (datetime.now() - check_time).days > 7:
+                        self.run_environment_check()
+                        return False
+                        
                     if date_str and (result is not None):
                         timestamp = datetime.now().strftime("%H:%M:%S")
                         if result:
@@ -378,6 +384,7 @@ class WelcomeInterface(BaseInterface):
 
     def cleanup_check(self):
         """清理检测相关资源"""
+<<<<<<< HEAD
         if self.thread and self.thread.isRunning():
             try:
                 # 先把对象引用保存下来
@@ -421,6 +428,41 @@ class WelcomeInterface(BaseInterface):
                     self.output_text_edit.append(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
             except Exception as e:
                 self.output_text_edit.append(f"[错误] 清理资源时出错: {str(e)}")
+=======
+        try:
+            if self.thread and self.thread.isRunning():
+                self.thread.quit()
+                self.thread.wait()
+
+                # 断开所有信号连接
+                if hasattr(self.environment_checker, 'output_signal'):
+                    try:
+                        self.environment_checker.output_signal.disconnect()
+                    except:
+                        pass
+                if hasattr(self.environment_checker, 'structured_result_signal'):
+                    try:
+                        self.environment_checker.structured_result_signal.disconnect()
+                    except:
+                        pass
+                if hasattr(self.environment_checker, 'finished'):
+                    try:
+                        self.environment_checker.finished.disconnect()
+                    except:
+                        pass
+
+                # 安全删除对象
+                if self.thread:
+                    self.thread.deleteLater()
+                if self.environment_checker:
+                    self.environment_checker.deleteLater()
+
+        except Exception as e:
+            print(f"清理资源时出现异常: {str(e)}")
+        finally:
+            self.thread = None
+            self.environment_checker = None
+>>>>>>> 79605118dcf5a6a6197f5cf20a3439c6a47db93d
 
     def append_output(self, message):
         """优化输出信息显示"""
