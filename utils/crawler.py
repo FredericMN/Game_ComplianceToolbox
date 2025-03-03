@@ -337,9 +337,9 @@ def match_version_numbers(
 
     try:
         wb = openpyxl.load_workbook(excel_filename)
-    except:
+    except Exception as e:
         progress_log_callback(progress_callback,
-            f"无法加载Excel：{excel_filename}")
+            f"无法加载Excel：{excel_filename}, 错误: {str(e)}")
         if progress_percent_callback:
             progress_percent_callback(100, stage)
         return
@@ -355,6 +355,12 @@ def match_version_numbers(
             ws.cell(row=1, column=len(current_cols)+1, value=nh)
             current_cols.append(nh)
     wb.save(excel_filename)
+
+    # 提前获取各字段对应的列索引，避免后续重复查找
+    field_column_map = {}
+    for field in new_headers:
+        if field in current_cols:
+            field_column_map[field] = current_cols.index(field) + 1
 
     name_col = None
     for idx, c in enumerate(current_cols, start=1):
@@ -386,7 +392,6 @@ def match_version_numbers(
     progress_log_callback(progress_callback,
         f"需要匹配 {total_count} 条游戏数据...")
 
-    #======== 修复点：写回9列时，使用表头定位列索引 ========
     fields_for_match = [
         "游戏名称",   # info[0]
         "出版单位",   # info[1]
@@ -403,24 +408,49 @@ def match_version_numbers(
     def fetch_game_info(g_name):
         if g_name in cache:
             return cache[g_name]
+        
+        # 创建WebDriver时添加性能优化选项，但不使用无头模式
         opt = webdriver.EdgeOptions()
-        driver = webdriver.Edge(
-            service=EdgeService(EdgeChromiumDriverManager().install()),
-            options=opt
-        )
+        # 禁用不必要的功能以提高性能
+        opt.add_argument('--disable-extensions')
+        opt.add_argument('--no-sandbox')
+        opt.add_argument('--disable-dev-shm-usage')
+        
+        driver = None
         res = None
         try:
+            driver = webdriver.Edge(
+                service=EdgeService(EdgeChromiumDriverManager().install()),
+                options=opt
+            )
+            # 设置页面加载超时
+            driver.set_page_load_timeout(30)
+            driver.set_script_timeout(30)
+            
             qn = re.sub(r'（[^）]*）', '', g_name)
             qn = re.sub(r'\([^)]*\)', '', qn).strip()
             url = (f"https://www.nppa.gov.cn/bsfw/jggs/cxjg/index.html?"
                    f"mc={qn}&cbdw=&yydw=&wh=undefined&description=#")
-            driver.get(url)
+            
+            # 添加重试机制
+            max_retries = 3
+            for retry in range(max_retries):
+                try:
+                    driver.get(url)
+                    break
+                except Exception as e:
+                    if retry == max_retries - 1:
+                        raise
+                    time.sleep(2)  # 等待一段时间后重试
+            
             try:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "#dataCenter"))
                 )
-            except:
-                raise RuntimeError("网页结构疑似存在更新变动，请联系开发者进行解决。")
+            except Exception as e:
+                progress_log_callback(progress_callback, 
+                    f"游戏 {g_name} 网页加载超时或结构变动: {str(e)}")
+                return None
 
             try:
                 WebDriverWait(driver, 10).until(
@@ -448,8 +478,20 @@ def match_version_numbers(
                 if not exact_elem:
                     exact_elem = rows2[0]
                 res = extract_game_info(exact_elem, multiple_flag, driver)
+        except requests.exceptions.RequestException as req_err:
+            progress_log_callback(progress_callback, 
+                f"游戏 {g_name} 网络请求异常: {str(req_err)}")
+            res = None
+        except Exception as e:
+            progress_log_callback(progress_callback, 
+                f"游戏 {g_name} 处理异常: {str(e)}")
+            res = None
         finally:
-            driver.quit()
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass  # 忽略关闭WebDriver可能出现的异常
 
         cache[g_name] = res
         return res
@@ -474,78 +516,101 @@ def match_version_numbers(
 
             gtype, appcat = "", ""
             if detail_url:
-                driver.execute_script("window.open(arguments[0]);", detail_url)
-                driver.switch_to.window(driver.window_handles[1])
-                random_delay()
-                lines = driver.find_elements(By.CSS_SELECTOR, ".cFrame.nFrame table tr")
-                for ln in lines:
+                try:
+                    driver.execute_script("window.open(arguments[0]);", detail_url)
+                    driver.switch_to.window(driver.window_handles[1])
+                    random_delay()
+                    
+                    # 添加等待以确保页面加载
                     try:
-                        lab = ln.find_element(By.XPATH, "./td[1]").text.strip()
-                        val = ln.find_element(By.XPATH, "./td[2]").text.strip()
-                        if lab == "游戏类型":
-                            gtype = val
-                        elif lab == "申报类别":
-                            appcat = val
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, ".cFrame.nFrame table tr"))
+                        )
                     except:
-                        pass
-                driver.close()
-                driver.switch_to.window(driver.window_handles[0])
+                        pass  # 如果等待超时，继续处理已加载的内容
+                    
+                    lines = driver.find_elements(By.CSS_SELECTOR, ".cFrame.nFrame table tr")
+                    for ln in lines:
+                        try:
+                            lab = ln.find_element(By.XPATH, "./td[1]").text.strip()
+                            val = ln.find_element(By.XPATH, "./td[2]").text.strip()
+                            if lab == "游戏类型":
+                                gtype = val
+                            elif lab == "申报类别":
+                                appcat = val
+                        except:
+                            pass
+                finally:
+                    # 确保窗口关闭和切换回主窗口
+                    try:
+                        driver.close()
+                        driver.switch_to.window(driver.window_handles[0])
+                    except:
+                        pass  # 忽略窗口操作可能出现的异常
 
             return [gn, pub, op, appr, pubn, ds, gtype, appcat, multi_flag]
-        except:
+        except Exception as e:
+            progress_log_callback(progress_callback, 
+                f"提取游戏详情异常: {str(e)}")
             return None
 
     partial_flush_size = 3
     completed = 0
     buffered = []
     results_map = {}
+    
+    # 使用线程锁保护Excel写入
+    excel_lock = threading.Lock()
 
     def flush_results(buf):
         if not buf:
             return []
         buf.sort(key=lambda x: x[0])  # row_idx升序
         lines = []
-        wb2 = openpyxl.load_workbook(excel_filename)
-        ws2 = wb2.active
-        # 取一次完整的表头(字符串列表)
-        head_cols = [c.value for c in ws2[1]]
+        
+        # 使用线程锁保护Excel文件写入
+        with excel_lock:
+            try:
+                wb2 = openpyxl.load_workbook(excel_filename)
+                ws2 = wb2.active
+                
+                for (r_idx, g_n, info) in buf:
+                    if info:
+                        # info顺序: [gn, pub, op, appr, pubn, ds, gtype, appcat, multi_flag]
+                        block = [
+                            f"--- [行 {r_idx}, 游戏名: {g_n}] ---",
+                            f"  游戏名称：{info[0]}",
+                            f"  出版单位：{info[1]}",
+                            f"  运营单位：{info[2]}",
+                            f"  文号：{info[3]}",
+                            f"  出版物号：{info[4]}",
+                            f"  时间：{info[5]}",
+                            f"  游戏类型：{info[6]}",
+                            f"  申报类别：{info[7]}",
+                            f"  是否多个结果：{info[8]}"
+                        ]
+                        lines.extend(block)
+                        
+                        # 使用预先计算的列索引映射写入数据
+                        for i, field_name in enumerate(fields_for_match):
+                            if field_name in field_column_map:
+                                col_idx = field_column_map[field_name]
+                                ws2.cell(row=r_idx, column=col_idx, value=info[i])
+                    else:
+                        lines.append(f"--- [行 {r_idx}, 游戏名: {g_n}] => 未查询到该游戏版号信息。")
 
-        for (r_idx, g_n, info) in buf:
-            if info:
-                # info顺序: [gn, pub, op, appr, pubn, ds, gtype, appcat, multi_flag]
-                # 逐一写入表头对应的列
-                block = [
-                    f"--- [行 {r_idx}, 游戏名: {g_n}] ---",
-                    f"  游戏名称：{info[0]}",
-                    f"  出版单位：{info[1]}",
-                    f"  运营单位：{info[2]}",
-                    f"  文号：{info[3]}",
-                    f"  出版物号：{info[4]}",
-                    f"  时间：{info[5]}",
-                    f"  游戏类型：{info[6]}",
-                    f"  申报类别：{info[7]}",
-                    f"  是否多个结果：{info[8]}"
-                ]
-                lines.extend(block)
-                # 按表头名字依次写入
-                for i, field_name in enumerate([
-                    "游戏名称","出版单位","运营单位","文号","出版物号",
-                    "时间","游戏类型","申报类别","是否多个结果"
-                ]):
-                    # 找到该列
-                    if field_name in head_cols:
-                        col_idx = head_cols.index(field_name) + 1  # 1-based
-                        ws2.cell(row=r_idx, column=col_idx, value=info[i])
-                    # 若找不到就不写
-            else:
-                lines.append(f"--- [行 {r_idx}, 游戏名: {g_n}] => 未查询到该游戏版号信息。")
-
-        wb2.save(excel_filename)
+                wb2.save(excel_filename)
+            except Exception as e:
+                lines.append(f"写入Excel出错: {str(e)}")
+        
         text = "\n".join(lines)
         progress_log_callback(progress_callback, text)
         return []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+    # 调整并发数量，避免过多线程导致资源争用
+    max_workers = min(MAX_WORKERS, 2)  # 版号匹配时限制并发数
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         future_map = {}
         for (r_idx, g_n) in game_list:
             future = ex.submit(fetch_game_info, g_n)
@@ -556,15 +621,16 @@ def match_version_numbers(
             try:
                 info = future.result()
             except Exception as e:
-                progress_log_callback(progress_callback, str(e))
-                if progress_percent_callback:
-                    progress_percent_callback(100, stage)
-                return
+                progress_log_callback(progress_callback, f"处理游戏 {g_na} 时出错: {str(e)}")
+                info = None
+            
             results_map[row_i] = info
             buffered.append((row_i, g_na, info))
             completed += 1
+            
             if len(buffered) >= partial_flush_size:
                 buffered = flush_results(buffered)
+            
             if progress_percent_callback:
                 pr = int(completed * 100 / total_count)
                 progress_percent_callback(pr, stage)

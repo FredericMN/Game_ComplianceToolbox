@@ -378,23 +378,49 @@ class WelcomeInterface(BaseInterface):
 
     def cleanup_check(self):
         """清理检测相关资源"""
-        if self.thread:
-            self.thread.quit()
-            self.thread.wait()
-
-        # 断开所有信号连接
-        try:
-            self.thread.started.disconnect()
-            self.environment_checker.output_signal.disconnect()
-            self.environment_checker.structured_result_signal.disconnect()
-            self.environment_checker.finished.disconnect()
-        except:
-            pass
-
-        self.thread.deleteLater()
-        self.environment_checker.deleteLater()
-        self.thread = None
-        self.environment_checker = None
+        if self.thread and self.thread.isRunning():
+            try:
+                # 先把对象引用保存下来
+                thread = self.thread
+                environment_checker = self.environment_checker
+                
+                # 先将属性设置为None，防止其他地方重复调用
+                self.thread = None
+                self.environment_checker = None
+                
+                # 停止线程
+                thread.quit()
+                # 等待线程结束，如果超时就强制终止
+                if not thread.wait(3000):  # 等待最多3秒
+                    self.output_text_edit.append("环境检测线程超时，强制终止")
+                
+                # 断开所有信号连接
+                try:
+                    thread.started.disconnect()
+                    if environment_checker:
+                        environment_checker.output_signal.disconnect()
+                        environment_checker.structured_result_signal.disconnect()
+                        environment_checker.finished.disconnect()
+                except (TypeError, RuntimeError):
+                    # 忽略已断开连接的异常
+                    pass
+                
+                # 安全删除对象
+                if environment_checker:
+                    environment_checker.deleteLater()
+                thread.deleteLater()
+                
+                # 清理任何残留的msedgedriver进程 - 使用延迟导入避免循环导入
+                try:
+                    # 延迟导入kill_msedgedriver函数
+                    import importlib
+                    main_module = importlib.import_module('main')
+                    if main_module.kill_msedgedriver():
+                        self.output_text_edit.append("[系统] 已清理残留的msedgedriver进程")
+                except Exception as e:
+                    self.output_text_edit.append(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
+            except Exception as e:
+                self.output_text_edit.append(f"[错误] 清理资源时出错: {str(e)}")
 
     def append_output(self, message):
         """优化输出信息显示"""

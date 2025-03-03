@@ -14,6 +14,7 @@ from selenium.webdriver.edge.service import Service as EdgeService
 import winreg
 import concurrent.futures
 import time
+import psutil  # 添加psutil导入
 
 
 class EnvironmentChecker(QObject):
@@ -30,6 +31,10 @@ class EnvironmentChecker(QObject):
         super().__init__()
         self.edge_version = None
         self.has_errors = False
+        # 确保初始化structured_results为空列表
+        self.structured_results = []
+        self.driver = None  # 跟踪WebDriver实例
+        self.driver_future = None  # 跟踪异步任务
 
         # 自定义的环境检测项目列表，可按需扩展
         self.check_items = [
@@ -38,27 +43,87 @@ class EnvironmentChecker(QObject):
             ("Edge WebDriver检测", self.check_edge_driver)
         ]
 
-        # 用于收集结构化检查结果
-        self.structured_results = []
-
     def run(self):
         """依次执行所有检测项，可考虑并发，但量少时顺序即可。"""
-        for item_name, func in self.check_items:
-            try:
-                self.output_signal.emit(f"开始检测：{item_name} ...")
-                ok, detail = func()  # 执行检测项，返回(bool, str)
-                if not ok:
+        # 确保每次运行前清空结果列表
+        self.structured_results = []
+        
+        try:
+            for item_name, func in self.check_items:
+                try:
+                    self.output_signal.emit(f"开始检测：{item_name} ...")
+                    ok, detail = func()  # 执行检测项，返回(bool, str)
+                    if not ok:
+                        self.has_errors = True
+                    self.structured_results.append((item_name, ok, detail))
+                except Exception as e:
                     self.has_errors = True
-                self.structured_results.append((item_name, ok, detail))
-            except Exception as e:
-                self.has_errors = True
-                detail_msg = f"检测过程中出现异常: {str(e)}"
-                self.output_signal.emit(detail_msg)
-                self.structured_results.append((item_name, False, detail_msg))
+                    detail_msg = f"检测过程中出现异常: {str(e)}"
+                    self.output_signal.emit(detail_msg)
+                    self.structured_results.append((item_name, False, detail_msg))
+        finally:
+            # 确保在检测结束时清理所有资源
+            self.cleanup_resources()
+            
+            # 发射结构化结果
+            self.structured_result_signal.emit(self.structured_results)
+            self.finished.emit(self.has_errors)
 
-        # 发射结构化结果
-        self.structured_result_signal.emit(self.structured_results)
-        self.finished.emit(self.has_errors)
+    def cleanup_resources(self):
+        """清理所有资源，包括WebDriver和msedgedriver进程"""
+        # 关闭WebDriver
+        self.quit_driver()
+        
+        # 清理msedgedriver进程
+        self.kill_msedgedriver()
+
+    def quit_driver(self):
+        """安全地关闭WebDriver"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception as e:
+                self.output_signal.emit(f"关闭WebDriver时出错: {str(e)}")
+            finally:
+                self.driver = None
+        
+        # 取消未完成的异步任务
+        if self.driver_future and not self.driver_future.done():
+            try:
+                self.driver_future.cancel()
+            except Exception:
+                pass
+            self.driver_future = None
+
+    def kill_msedgedriver(self):
+        """终止所有 msedgedriver.exe 进程"""
+        terminated_count = 0
+        failed_count = 0
+        
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                # 确保proc.info['name']存在且为msedgedriver.exe
+                if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
+                    try:
+                        # 先尝试温和地终止进程
+                        proc.terminate()
+                        # 等待最多3秒
+                        gone, alive = psutil.wait_procs([proc], timeout=3)
+                        
+                        # 如果进程仍然存在，强制终止
+                        if proc in alive:
+                            proc.kill()
+                        
+                        terminated_count += 1
+                        self.output_signal.emit(f"已终止 msedgedriver.exe (PID: {proc.info['pid']})")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                        failed_count += 1
+                        self.output_signal.emit(f"终止 msedgedriver.exe (PID: {proc.info['pid']}) 时出错: {e}")
+            except Exception as e:
+                self.output_signal.emit(f"处理进程信息时出错: {e}")
+        
+        if terminated_count > 0 or failed_count > 0:
+            self.output_signal.emit(f"清理完成: 已终止 {terminated_count} 个msedgedriver进程, 失败 {failed_count} 个进程")
 
     def check_network(self):
         """检测网络连接"""
@@ -109,7 +174,6 @@ class EnvironmentChecker(QObject):
             return False, msg
 
         self.output_signal.emit("检测Edge WebDriver...")
-        driver = None
         try:
             options = Options()
             options.use_chromium = True
@@ -118,6 +182,7 @@ class EnvironmentChecker(QObject):
             # 尝试启动
             driver = self.create_edge_driver_with_timeout(options, service=None, timeout=10)
             if driver:
+                self.driver = driver  # 保存引用以便稍后清理
                 self.output_signal.emit("Edge WebDriver已正确配置。")
                 return True, "Edge WebDriver已正确配置。"
             else:
@@ -132,6 +197,7 @@ class EnvironmentChecker(QObject):
                 service = EdgeService(driver_path)
                 driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
                 if driver:
+                    self.driver = driver  # 保存引用以便稍后清理
                     msg = f"Edge WebDriver下载并配置成功：{driver_path}"
                     self.output_signal.emit(msg)
                     return True, msg
@@ -144,24 +210,27 @@ class EnvironmentChecker(QObject):
                        "下载链接: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
                 self.output_signal.emit(msg)
                 return False, msg
-        finally:
-            if driver:
-                driver.quit()
 
     def create_edge_driver_with_timeout(self, options, service=None, timeout=10):
         """并发启动Edge WebDriver，如超时则返回None"""
         def create_driver():
-            if service:
-                return webdriver.Edge(service=service, options=options)
-            else:
-                return webdriver.Edge(options=options)
+            try:
+                if service:
+                    return webdriver.Edge(service=service, options=options)
+                else:
+                    return webdriver.Edge(options=options)
+            except Exception as e:
+                self.output_signal.emit(f"创建Edge WebDriver时异常: {e}")
+                return None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(create_driver)
             try:
-                driver = future.result(timeout=timeout)
+                self.driver_future = executor.submit(create_driver)
+                driver = self.driver_future.result(timeout=timeout)
+                self.driver_future = None
                 return driver
             except concurrent.futures.TimeoutError:
+                self.output_signal.emit("启动Edge WebDriver超时")
                 return None
             except Exception as e:
                 self.output_signal.emit(f"启动Edge WebDriver时异常: {e}")
