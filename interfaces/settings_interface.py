@@ -11,6 +11,9 @@ from utils.version import __version__
 from utils.version_checker import VersionChecker, VersionCheckWorker, DownloadWorker
 import os
 import sys
+import time
+import json
+import requests
 
 def resource_path(relative_path):
     """获取资源文件的绝对路径，兼容开发和打包后的环境"""
@@ -27,35 +30,134 @@ class VersionSelectionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("选择下载版本")
         self.setModal(True)
-        self.setFixedSize(500, 350)  # 增加高度以容纳说明文本
+        self.setFixedSize(500, 400)  # 稍微增加高度以更好地显示内容
         layout = QVBoxLayout()
+        layout.setSpacing(15)  # 增加间距
 
-        # Release Notes 显示
-        release_label = QLabel("更新内容：")
+        # 更新内容显示
+        release_label = QLabel("更新信息：")
         release_label.setWordWrap(True)
-        release_label.setStyleSheet("font-weight: bold;")
+        release_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(release_label)
 
         self.release_text = QTextEdit()
         self.release_text.setReadOnly(True)
         self.release_text.setPlainText(release_notes if release_notes else "无更新说明。")
+        self.release_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
         layout.addWidget(self.release_text)
 
         # 版本选择说明
-        description_label = QLabel("拥有英伟达20系以上显卡且安装了最新显卡驱动的用户建议选择GPU版本。")
+        description_label = QLabel("请选择要下载的版本：")
         description_label.setWordWrap(True)
-        description_label.setStyleSheet("color: #555555;")
+        description_label.setStyleSheet("""
+            QLabel {
+                color: #666666;
+                font-size: 12px;
+                margin-top: 10px;
+            }
+        """)
         layout.addWidget(description_label)
 
+        # GPU版本说明
+        gpu_note = QLabel("* GPU版本：推荐配置为英伟达20系及以上显卡，且已安装最新显卡驱动")
+        gpu_note.setWordWrap(True)
+        gpu_note.setStyleSheet("color: #666666; font-size: 12px;")
+        layout.addWidget(gpu_note)
+
+        # CPU版本说明
+        cpu_note = QLabel("* CPU版本：适用于所有用户，性能略低于GPU版本")
+        cpu_note.setWordWrap(True)
+        cpu_note.setStyleSheet("color: #666666; font-size: 12px;")
+        layout.addWidget(cpu_note)
+
+        # 按钮区域
         self.button_box = QDialogButtonBox()
         self.cpu_button = QPushButton("下载CPU版")
         self.gpu_button = QPushButton("下载GPU版")
         self.cancel_button = QPushButton("取消更新")
+        
+        # 设置按钮样式
+        button_style = """
+            QPushButton {
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+            }
+            QPushButton:hover {
+                background-color: #e0e0e0;
+            }
+            QPushButton:pressed {
+                background-color: #d0d0d0;
+            }
+        """
+        
+        # 为每个按钮设置不同的样式
+        self.cpu_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #2473a7;
+            }
+        """)
+        
+        self.gpu_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #2ecc71;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #27ae60;
+            }
+            QPushButton:pressed {
+                background-color: #219a52;
+            }
+        """)
+        
+        self.cancel_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:pressed {
+                background-color: #a93226;
+            }
+        """)
+
+        # 设置按钮大小
+        for btn in [self.cpu_button, self.gpu_button, self.cancel_button]:
+            btn.setMinimumWidth(120)
+            btn.setCursor(Qt.PointingHandCursor)  # 添加鼠标悬停效果
+        
         self.button_box.addButton(self.cpu_button, QDialogButtonBox.ActionRole)
         self.button_box.addButton(self.gpu_button, QDialogButtonBox.ActionRole)
         self.button_box.addButton(self.cancel_button, QDialogButtonBox.RejectRole)
 
-        layout.addWidget(self.button_box)
+        # 设置按钮布局
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.button_box)
+        button_layout.setAlignment(Qt.AlignCenter)  # 居中对齐按钮
+        layout.addLayout(button_layout)
+
         self.setLayout(layout)
 
         self.cpu_button.clicked.connect(self.accept_cpu)
@@ -80,7 +182,13 @@ class SettingsInterface(BaseInterface):
         self.current_version = __version__
         self.update_thread = None  # 更新检查线程
         self.download_thread = None  # 下载线程
+        self.download_worker = None  # 添加 download_worker 属性
         self.selected_version = None  # 'cpu' 或 'gpu'
+        self.download_button_box = QDialogButtonBox()
+        self._download_start_time = None
+        self._last_update_time = None
+        self._last_bytes = 0
+        
         self.init_ui()
         self.load_local_update_logs()  # 加载本地更新日志
 
@@ -90,11 +198,11 @@ class SettingsInterface(BaseInterface):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
 
-        # 创建“检查版本更新”按钮的水平布局
+        # 创建"检查版本更新"按钮的水平布局
         update_button_layout = QHBoxLayout()
         update_button_layout.setAlignment(Qt.AlignLeft)
 
-        # 创建“检查版本更新”按钮
+        # 创建"检查版本更新"按钮
         self.check_update_button = QPushButton("检查版本更新")
         self.check_update_button.setFixedHeight(40)  # 增加按钮高度
         self.check_update_button.setFixedWidth(200)   # 设置按钮宽度，不横跨整个界面
@@ -238,14 +346,14 @@ class SettingsInterface(BaseInterface):
             self.update_log_text_edit.setPlainText(f"无法读取更新日志：{str(e)}")
 
     def handle_check_update(self):
-        self.check_update_button.setEnabled(False)
-        self.output_text_edit.append("正在检查更新...")
-
-        # 如果已有线程在运行，先停止
-        if self.update_thread and self.update_thread.isRunning():
+        # 在开始前清理旧线程
+        if self.update_thread:
             self.update_thread.quit()
             self.update_thread.wait()
-            self.update_thread = None  # 将线程引用设为 None
+            self.update_thread = None
+
+        self.check_update_button.setEnabled(False)
+        self.output_text_edit.append("正在检查更新...")
 
         self.update_thread = QThread()
         self.version_checker = VersionChecker()
@@ -264,7 +372,13 @@ class SettingsInterface(BaseInterface):
         self.update_thread.start()
 
     def _clear_thread_reference(self, thread_name):
-        """清除线程引用以避免引用已删除的对象"""
+        """线程清理时断开所有信号"""
+        thread = getattr(self, thread_name)
+        if thread:
+            try:
+                thread.disconnect()
+            except:
+                pass
         setattr(self, thread_name, None)
 
     def report_progress(self, message):
@@ -273,8 +387,14 @@ class SettingsInterface(BaseInterface):
     def on_update_check_finished(self, is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes):
         """处理版本检测完成后的逻辑"""
         if is_new_version:
-            # 使用自定义对话框让用户选择下载版本，并传递release_notes
-            dialog = VersionSelectionDialog(release_notes, self)
+            # 使用自定义对话框让用户选择下载版本，并在对话框中显示版本信息
+            version_info = f"""当前版本: {self.current_version}
+最新版本: {latest_version}
+
+更新内容：
+{release_notes}"""
+            
+            dialog = VersionSelectionDialog(version_info, self)
             dialog.setWindowTitle("发现新版本")
             dialog.exec()
 
@@ -292,42 +412,134 @@ class SettingsInterface(BaseInterface):
         else:
             self.output_text_edit.append("无法获取最新版本信息。")
             QMessageBox.warning(self, "更新失败", "无法获取最新版本信息。")
+        
         self.check_update_button.setEnabled(True)
 
     def start_download(self, download_url):
         """开始下载指定的版本"""
-        if self.download_thread and self.download_thread.isRunning():
-            self.download_thread.quit()
-            self.download_thread.wait()
-            self.download_thread = None  # 将线程引用设为 None
+        # 检查文件是否已存在
+        filename = os.path.basename(download_url)
+        save_path = os.path.join(os.getcwd(), filename)
+        
+        if os.path.exists(save_path):
+            reply = QMessageBox.question(
+                self,
+                "文件已存在",
+                f"文件 {filename} 已存在，是否重新下载？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+            try:
+                os.remove(save_path)  # 删除已存在的文件
+            except Exception as e:
+                QMessageBox.warning(self, "错误", f"无法删除已存在的文件：{str(e)}")
+                return
 
-        self.output_text_edit.append("开始下载更新文件...")
-        self.download_progress_bar.setValue(0)
-        self.download_progress_bar.setVisible(True)
-        self.download_progress_bar.setFormat("下载进度：%p%")
-        self.check_update_button.setEnabled(False)  # 禁用“检查版本更新”按钮
-
+        # 清理之前的下载线程和工作器
+        self.cleanup_download_resources()
+        
+        # 创建并配置新的下载工作器
         self.download_thread = QThread()
         self.download_worker = DownloadWorker(download_url)
         self.download_worker.moveToThread(self.download_thread)
-
+        
+        # 连接信号
         self.download_thread.started.connect(self.download_worker.run)
         self.download_worker.progress.connect(self.report_download_progress)
         self.download_worker.finished.connect(self.on_download_finished)
-        self.download_worker.finished.connect(self.download_worker.deleteLater)
-        self.download_worker.finished.connect(self.download_thread.quit)  # 确保线程退出
-        self.download_thread.finished.connect(self.download_thread.deleteLater)
-        self.download_thread.finished.connect(lambda: self._clear_thread_reference('download_thread'))
-
+        self.download_worker.finished.connect(lambda: self.cleanup_download_resources())
+        
+        # 更新UI状态
+        self.download_progress_bar.setValue(0)
+        self.download_progress_bar.setVisible(True)
+        self.check_update_button.setEnabled(False)
+        
+        # 显示取消按钮
+        self.download_button_box.clear()
+        cancel_button = QPushButton("取消下载")
+        cancel_button.clicked.connect(self.cancel_download)
+        self.download_button_box.addButton(cancel_button, QDialogButtonBox.RejectRole)
+        
+        # 开始下载
         self.download_thread.start()
+        self.output_text_edit.append(f"开始下载 {filename}...")
 
-    def report_download_progress(self, percent, message=None):
-        """更新下载进度条和信息输出"""
+    def cleanup_download_resources(self):
+        """清理下载相关资源"""
+        if self.download_thread and self.download_thread.isRunning():
+            self.download_thread.quit()
+            self.download_thread.wait()
+        
+        if self.download_worker:
+            try:
+                self.download_worker.disconnect()
+            except:
+                pass
+            self.download_worker = None
+            
+        if self.download_thread:
+            try:
+                self.download_thread.disconnect()
+            except:
+                pass
+            self.download_thread = None
+        
+        # 重置下载状态
+        self._download_start_time = None
+        self._last_update_time = None
+        self._last_bytes = 0
+
+    def cancel_download(self):
+        """取消下载"""
+        if self.download_worker:
+            self.download_worker.cancel()
+            self.output_text_edit.append("正在取消下载...")
+            self.download_progress_bar.setFormat("正在取消...")
+            # 清理会在 on_download_finished 中完成
+
+    def report_download_progress(self, percent, message):
+        """更新下载进度"""
         self.download_progress_bar.setValue(percent)
+        
+        current_time = time.time()
+        if not self._download_start_time:
+            self._download_start_time = current_time
+            self._last_update_time = current_time
+            self._last_bytes = 0
+            
+        if current_time - self._last_update_time >= 0.5:  # 每0.5秒更新一次速度
+            if hasattr(self.download_worker, 'downloaded_bytes'):
+                bytes_diff = self.download_worker.downloaded_bytes - self._last_bytes
+                time_diff = current_time - self._last_update_time
+                speed = bytes_diff / time_diff
+                
+                # 格式化速度显示
+                if speed < 1024 * 1024:  # < 1MB/s
+                    speed_str = f"{speed/1024:.1f} KB/s"
+                else:  # >= 1MB/s
+                    speed_str = f"{speed/1024/1024:.1f} MB/s"
+                
+                self.download_progress_bar.setFormat(f"下载进度：%p% ({speed_str})")
+                self._last_update_time = current_time
+                self._last_bytes = self.download_worker.downloaded_bytes
+        
         if message:
             self.output_text_edit.append(message)
 
     def on_download_finished(self, success, file_path):
+        # 清理临时文件
+        if not success and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                self.output_text_edit.append(f"清理临时文件失败: {str(e)}")
+        
+        # 重置下载状态
+        self._download_start_time = None
+        self._last_update_time = None
+        self._last_bytes = 0
+
         self.download_progress_bar.setVisible(False)
         self.download_progress_bar.setValue(0)
         if success:
@@ -344,3 +556,31 @@ class SettingsInterface(BaseInterface):
             self.output_text_edit.append("下载失败，请检查网络连接或文件写入权限。")
             QMessageBox.warning(self, "下载失败", "下载最新版本时出错，请检查网络连接或文件写入权限。")
         self.check_update_button.setEnabled(True)
+
+    def verify_download(self, file_path, expected_size=None):
+        """验证下载文件的完整性"""
+        if not os.path.exists(file_path):
+            return False
+        if expected_size and os.path.getsize(file_path) != expected_size:
+            return False
+        return True
+
+    def save_download_progress(self, url, downloaded_bytes):
+        """保存下载进度"""
+        try:
+            with open('.download_progress', 'w') as f:
+                json.dump({
+                    'url': url,
+                    'bytes': downloaded_bytes,
+                    'time': time.time()
+                }, f)
+        except:
+            pass
+
+    def check_network(self):
+        """检查网络连接状态"""
+        try:
+            requests.get('https://www.baidu.com', timeout=3)
+            return True
+        except:
+            return False

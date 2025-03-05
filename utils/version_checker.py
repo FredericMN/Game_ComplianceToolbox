@@ -5,6 +5,8 @@ from utils.version import __version__
 from PySide6.QtCore import QObject, Signal
 import os
 import threading
+from packaging import version  # 新增标准版本库
+import time
 
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 OWNER = "FredericMN"  # 替换为你的 GitHub 用户名
@@ -19,23 +21,36 @@ class VersionChecker:
 
     def check_latest_version(self):
         url = GITHUB_API_URL.format(owner=OWNER, repo=REPO)
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
+        for attempt in range(3):
+            try:
+                response = requests.get(url, timeout=(3.05, 30),
+                                      headers={'Accept': 'application/vnd.github+json'},
+                                      params={'per_page': 1})
+                response.raise_for_status()
+                
                 data = response.json()
-                self.latest_version = data['tag_name'].lstrip('v')  # 去除 'v' 前缀
+                # 增加字段校验
+                if not all(key in data for key in ['tag_name', 'assets', 'body']):
+                    raise ValueError("无效的API响应格式")
+                
+                self.latest_version = data['tag_name'].lstrip('v')
                 self.assets = data['assets']
-                self.release_notes = data['body']
+                self.release_notes = data['body'][:2000]  # 限制长度防止内存溢出
                 return True
-            else:
-                raise Exception(f"无法获取最新版本信息。状态码: {response.status_code}")
-        except requests.RequestException as e:
-            raise Exception(f"网络请求失败：{str(e)}")
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)  # 指数退避重试
 
     def is_new_version_available(self):
-        if not self.latest_version:
-            self.check_latest_version()
-        return self.compare_versions(self.latest_version, self.current_version) > 0
+        try:
+            if not self.latest_version:
+                self.check_latest_version()
+            return version.parse(self.latest_version) > version.parse(self.current_version)
+        except Exception as e:
+            print(f"版本比较错误: {str(e)}")
+            return False
 
     def compare_versions(self, v1, v2):
         def parse_version(v):
@@ -76,55 +91,113 @@ class VersionCheckWorker(QObject):
     def run(self):
         try:
             self.progress.emit("正在获取最新版本信息...")
-            self.version_checker.check_latest_version()
-            if self.version_checker.is_new_version_available():
-                cpu_url, gpu_url = self.version_checker.get_download_urls()
-                if not cpu_url and not gpu_url:
-                    self.progress.emit("未找到可用的更新文件。")
-                    self.finished.emit(False, None, None, None, None)
-                    return
-                self.progress.emit(f"发现新版本：{self.version_checker.latest_version}")
-                self.finished.emit(True, self.version_checker.latest_version, cpu_url, gpu_url, self.version_checker.release_notes)
-            else:
-                self.finished.emit(False, self.version_checker.latest_version, None, None, None)
+            
+            # 增加超时控制
+            result = self._run_with_timeout(30)
+            self.finished.emit(*result)
+            
         except Exception as e:
             self.progress.emit(f"检查更新失败: {str(e)}")
             self.finished.emit(False, None, None, None, None)
 
+    def _run_with_timeout(self, timeout):
+        """带超时的执行方法"""
+        result = [False, None, None, None, None]
+        event = threading.Event()
+        
+        def target():
+            try:
+                self.version_checker.check_latest_version()
+                if self.version_checker.is_new_version_available():
+                    cpu_url, gpu_url = self.version_checker.get_download_urls()
+                    result[:] = [True, self.version_checker.latest_version, 
+                                cpu_url, gpu_url, self.version_checker.release_notes]
+            except Exception as e:
+                raise
+            finally:
+                event.set()
+                
+        thread = threading.Thread(target=target)
+        thread.start()
+        event.wait(timeout)
+        
+        if not event.is_set():
+            raise TimeoutError("操作超时")
+            
+        return result
+
 class DownloadWorker(QObject):
-    progress = Signal(int, str)  # percent, message
-    finished = Signal(bool, str)  # success, file_path
-
-    def __init__(self, download_url):
-        super().__init__()
+    progress = Signal(int, str)
+    finished = Signal(bool, str)
+    
+    def __init__(self, download_url, parent=None):
+        super().__init__(parent)
         self.download_url = download_url
-
+        self._cancel_flag = False
+        self.downloaded_bytes = 0  # 添加已下载字节计数
+        
+    def cancel(self):
+        self._cancel_flag = True
+        
     def run(self):
         try:
-            response = requests.get(self.download_url, stream=True, timeout=30)
-            total_length = response.headers.get('content-length')
-            if total_length is None:
-                self.progress.emit(0, "无法获取文件大小。")
-                self.finished.emit(False, None)
-                return
-            total_length = int(total_length)
-            filename = os.path.basename(self.download_url)
-            save_path = os.path.join(os.getcwd(), filename)
-            with open(save_path, 'wb') as f:
-                downloaded = 0
-                for data in response.iter_content(chunk_size=4096):
-                    if data:
-                        f.write(data)
-                        downloaded += len(data)
-                        percent = int(downloaded * 100 / total_length)
-                        self.progress.emit(percent, f"下载进度：{percent}%")
-            self.finished.emit(True, save_path)
-        except requests.RequestException as e:
-            self.progress.emit(0, f"下载失败：{str(e)}")
-            self.finished.emit(False, None)
-        except PermissionError:
-            self.progress.emit(0, "文件写入权限不足。")
-            self.finished.emit(False, None)
+            for attempt in range(3):
+                if self._cancel_flag:
+                    break
+                
+                try:
+                    response = requests.get(
+                        self.download_url, 
+                        stream=True,
+                        timeout=(3.05, 30),
+                        headers={'Cache-Control': 'no-cache'}
+                    )
+                    response.raise_for_status()
+                    
+                    total_length = int(response.headers.get('content-length', 0))
+                    filename = os.path.basename(self.download_url)
+                    save_path = os.path.join(os.getcwd(), filename)
+                    
+                    self.downloaded_bytes = 0
+                    chunk_size = 8192 * 16  # 增加块大小以提高下载速度
+                    
+                    with open(save_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if self._cancel_flag:
+                                raise Exception("用户取消下载")
+                                
+                            if chunk:
+                                f.write(chunk)
+                                self.downloaded_bytes += len(chunk)
+                                
+                                if total_length > 0:
+                                    percent = min(99, int(self.downloaded_bytes * 100 / total_length))
+                                else:
+                                    percent = 0
+                                    
+                                self.progress.emit(
+                                    percent,
+                                    f"下载中... {self.downloaded_bytes//1024//1024:.1f}MB"
+                                    f"{f'/{total_length//1024//1024:.1f}MB' if total_length else ''}"
+                                )
+                                
+                    if total_length > 0 and self.downloaded_bytes != total_length:
+                        raise Exception("文件下载不完整")
+                        
+                    self.finished.emit(True, save_path)
+                    return
+                    
+                except requests.exceptions.RequestException as e:
+                    if attempt == 2:  # 最后一次尝试失败
+                        raise
+                    time.sleep(2 ** attempt)  # 指数退避
+                    
         except Exception as e:
-            self.progress.emit(0, f"下载过程中发生错误：{str(e)}")
+            error_msg = f"下载失败：{str(e)}"
+            try:
+                if 'save_path' in locals():
+                    os.remove(save_path)
+            except:
+                pass
+            self.progress.emit(0, error_msg)
             self.finished.emit(False, None)
