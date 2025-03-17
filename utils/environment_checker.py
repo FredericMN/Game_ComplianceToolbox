@@ -76,6 +76,24 @@ class EnvironmentChecker(QObject):
         
         # 清理msedgedriver进程
         self.kill_msedgedriver()
+        
+        # 清理临时用户数据目录
+        try:
+            import tempfile
+            import glob
+            import shutil
+            
+            # 查找并删除所有edge_driver_*临时目录
+            pattern = os.path.join(tempfile.gettempdir(), "edge_driver_*")
+            for dir_path in glob.glob(pattern):
+                if os.path.isdir(dir_path):
+                    try:
+                        shutil.rmtree(dir_path, ignore_errors=True)
+                        self.output_signal.emit(f"已清理临时目录: {dir_path}")
+                    except Exception as e:
+                        self.output_signal.emit(f"清理临时目录失败: {dir_path}, 错误: {str(e)}")
+        except Exception as e:
+            self.output_signal.emit(f"清理临时目录时出错: {str(e)}")
 
     def quit_driver(self):
         """安全地关闭WebDriver"""
@@ -178,6 +196,28 @@ class EnvironmentChecker(QObject):
             options = Options()
             options.use_chromium = True
             options.add_argument("--headless")
+            
+            # 创建唯一的用户数据目录
+            import tempfile
+            import uuid
+            import shutil
+            
+            # 创建一个唯一的临时目录路径
+            temp_dir = os.path.join(tempfile.gettempdir(), f"edge_driver_{uuid.uuid4().hex}")
+            
+            # 确保目录存在且为空
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # 添加用户数据目录参数
+            options.add_argument(f"--user-data-dir={temp_dir}")
+            
+            # 禁用扩展和GPU加速以减少问题
+            options.add_argument("--disable-extensions")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
 
             # 尝试启动
             driver = self.create_edge_driver_with_timeout(options, service=None, timeout=10)
@@ -189,7 +229,10 @@ class EnvironmentChecker(QObject):
                 msg = "Edge WebDriver启动超时或失败。"
                 self.output_signal.emit(msg)
                 return False, msg
-        except WebDriverException:
+        except WebDriverException as e:
+            # 输出详细错误信息以便调试
+            self.output_signal.emit(f"WebDriver异常: {str(e)}")
+            
             # 尝试安装
             self.output_signal.emit("未配置Edge WebDriver，尝试下载中...")
             try:
