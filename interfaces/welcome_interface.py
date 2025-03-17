@@ -416,13 +416,26 @@ class WelcomeInterface(BaseInterface):
                     environment_checker.deleteLater()
                 thread.deleteLater()
                 
-                # 清理任何残留的msedgedriver进程 - 使用延迟导入避免循环导入
+                # 清理任何残留的msedgedriver进程 - 直接使用psutil而不是导入main
                 try:
-                    # 延迟导入kill_msedgedriver函数
-                    import importlib
-                    main_module = importlib.import_module('main')
-                    if main_module.kill_msedgedriver():
-                        self.output_text_edit.append("[系统] 已清理残留的msedgedriver进程")
+                    import psutil
+                    terminated_count = 0
+                    for proc in psutil.process_iter(['pid', 'name']):
+                        try:
+                            if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
+                                try:
+                                    proc.terminate()
+                                    gone, alive = psutil.wait_procs([proc], timeout=3)
+                                    if proc in alive:
+                                        proc.kill()
+                                    terminated_count += 1
+                                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                                    self.output_text_edit.append(f"[警告] 终止进程时出错: {str(e)}")
+                        except Exception as e:
+                            pass
+                    
+                    if terminated_count > 0:
+                        self.output_text_edit.append(f"[系统] 已清理 {terminated_count} 个msedgedriver进程")
                 except Exception as e:
                     self.output_text_edit.append(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
             except Exception as e:
