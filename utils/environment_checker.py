@@ -118,30 +118,44 @@ class EnvironmentChecker(QObject):
         terminated_count = 0
         failed_count = 0
         
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                # 确保proc.info['name']存在且为msedgedriver.exe
-                if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
-                    try:
-                        # 先尝试温和地终止进程
-                        proc.terminate()
-                        # 等待最多3秒
-                        gone, alive = psutil.wait_procs([proc], timeout=3)
-                        
-                        # 如果进程仍然存在，强制终止
-                        if proc in alive:
-                            proc.kill()
-                        
-                        terminated_count += 1
-                        self.output_signal.emit(f"已终止 msedgedriver.exe (PID: {proc.info['pid']})")
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                        failed_count += 1
-                        self.output_signal.emit(f"终止 msedgedriver.exe (PID: {proc.info['pid']}) 时出错: {e}")
-            except Exception as e:
-                self.output_signal.emit(f"处理进程信息时出错: {e}")
-        
-        if terminated_count > 0 or failed_count > 0:
-            self.output_signal.emit(f"清理完成: 已终止 {terminated_count} 个msedgedriver进程, 失败 {failed_count} 个进程")
+        try:
+            # 首先尝试使用系统命令强制终止所有msedgedriver进程
+            if sys.platform == 'win32':
+                try:
+                    # 使用taskkill命令强制终止所有msedgedriver进程
+                    subprocess.call('taskkill /f /im msedgedriver.exe', shell=True, 
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.output_signal.emit("已使用系统命令尝试终止所有msedgedriver进程")
+                except Exception:
+                    pass
+            
+            # 然后使用psutil逐个终止
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    # 确保proc.info['name']存在且为msedgedriver.exe
+                    if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
+                        try:
+                            # 先尝试温和地终止进程
+                            proc.terminate()
+                            # 等待最多3秒
+                            gone, alive = psutil.wait_procs([proc], timeout=3)
+                            
+                            # 如果进程仍然存在，强制终止
+                            if proc in alive:
+                                proc.kill()
+                            
+                            terminated_count += 1
+                            self.output_signal.emit(f"已终止 msedgedriver.exe (PID: {proc.info['pid']})")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                            failed_count += 1
+                            self.output_signal.emit(f"终止 msedgedriver.exe (PID: {proc.info['pid']}) 时出错: {e}")
+                except Exception as e:
+                    pass
+            
+            if terminated_count > 0 or failed_count > 0:
+                self.output_signal.emit(f"清理完成: 已终止 {terminated_count} 个msedgedriver进程, 失败 {failed_count} 个进程")
+        except Exception as e:
+            self.output_signal.emit(f"清理msedgedriver进程时出现异常: {e}")
 
     def check_network(self):
         """检测网络连接"""
@@ -192,67 +206,114 @@ class EnvironmentChecker(QObject):
             return False, msg
 
         self.output_signal.emit("检测Edge WebDriver...")
-        try:
-            options = Options()
-            options.use_chromium = True
-            options.add_argument("--headless")
-            
-            # 创建唯一的用户数据目录
-            import tempfile
-            import uuid
-            import shutil
-            
-            # 创建一个唯一的临时目录路径
-            temp_dir = os.path.join(tempfile.gettempdir(), f"edge_driver_{uuid.uuid4().hex}")
-            
-            # 确保目录存在且为空
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 添加用户数据目录参数
-            options.add_argument(f"--user-data-dir={temp_dir}")
-            
-            # 禁用扩展和GPU加速以减少问题
-            options.add_argument("--disable-extensions")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-
-            # 尝试启动
-            driver = self.create_edge_driver_with_timeout(options, service=None, timeout=10)
-            if driver:
-                self.driver = driver  # 保存引用以便稍后清理
-                self.output_signal.emit("Edge WebDriver已正确配置。")
-                return True, "Edge WebDriver已正确配置。"
-            else:
-                msg = "Edge WebDriver启动超时或失败。"
-                self.output_signal.emit(msg)
-                return False, msg
-        except WebDriverException as e:
-            # 输出详细错误信息以便调试
-            self.output_signal.emit(f"WebDriver异常: {str(e)}")
-            
-            # 尝试安装
-            self.output_signal.emit("未配置Edge WebDriver，尝试下载中...")
+        
+        # 在开始前先强制清理任何可能残留的msedgedriver进程
+        self.kill_msedgedriver()
+        
+        # 最多尝试3次
+        for attempt in range(3):
             try:
-                driver_path = EdgeChromiumDriverManager().install()
-                service = EdgeService(driver_path)
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+                options = Options()
+                options.use_chromium = True
+                options.add_argument("--headless")
+                
+                # 创建唯一的用户数据目录
+                import tempfile
+                import uuid
+                import shutil
+                import time
+                
+                # 添加时间戳和随机值确保唯一性
+                timestamp = int(time.time())
+                random_id = uuid.uuid4().hex
+                temp_dir = os.path.join(tempfile.gettempdir(), f"edge_driver_{timestamp}_{random_id}")
+                
+                # 确保目录存在且为空
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # 添加更多启动参数以提高稳定性
+                options.add_argument(f"--user-data-dir={temp_dir}")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--disable-software-rasterizer")
+                options.add_argument("--disable-background-networking")
+                options.add_argument("--disable-default-apps")
+                options.add_argument("--disable-prompt-on-repost")
+                options.add_argument("--disable-sync")
+                options.add_argument("--disable-translate")
+                options.add_argument("--metrics-recording-only")
+                options.add_argument("--mute-audio")
+                options.add_argument("--no-first-run")
+                
+                # 如果不是第一次尝试，添加短暂延迟
+                if attempt > 0:
+                    self.output_signal.emit(f"重试启动WebDriver (尝试 {attempt+1}/3)...")
+                    time.sleep(2 * attempt)  # 逐渐增加延迟
+
+                # 尝试启动
+                driver = self.create_edge_driver_with_timeout(options, service=None, timeout=15)
                 if driver:
                     self.driver = driver  # 保存引用以便稍后清理
-                    msg = f"Edge WebDriver下载并配置成功：{driver_path}"
-                    self.output_signal.emit(msg)
-                    return True, msg
+                    self.output_signal.emit("Edge WebDriver已正确配置。")
+                    return True, "Edge WebDriver已正确配置。"
+                elif attempt < 2:  # 如果不是最后一次尝试，继续循环
+                    continue
                 else:
-                    msg = "Edge WebDriver下载后仍无法启动。"
+                    msg = "Edge WebDriver启动超时或失败。"
                     self.output_signal.emit(msg)
                     return False, msg
-            except Exception as download_e:
-                msg = (f"Edge WebDriver下载失败: {str(download_e)}，请手动配置。"
-                       "下载链接: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
-                self.output_signal.emit(msg)
-                return False, msg
+                    
+            except WebDriverException as e:
+                error_msg = str(e)
+                self.output_signal.emit(f"WebDriver异常: {error_msg}")
+                
+                # 如果是最后一次尝试，尝试下载新的WebDriver
+                if attempt == 2:
+                    # 尝试安装
+                    self.output_signal.emit("尝试下载新的Edge WebDriver...")
+                    try:
+                        driver_path = EdgeChromiumDriverManager().install()
+                        service = EdgeService(driver_path)
+                        # 创建新的选项对象，避免重用
+                        new_options = Options()
+                        new_options.use_chromium = True
+                        new_options.add_argument("--headless")
+                        new_options.add_argument(f"--user-data-dir={temp_dir}")
+                        new_options.add_argument("--disable-extensions")
+                        new_options.add_argument("--disable-gpu")
+                        new_options.add_argument("--no-sandbox")
+                        
+                        driver = self.create_edge_driver_with_timeout(new_options, service=service, timeout=15)
+                        if driver:
+                            self.driver = driver  # 保存引用以便稍后清理
+                            msg = f"Edge WebDriver下载并配置成功：{driver_path}"
+                            self.output_signal.emit(msg)
+                            return True, msg
+                        else:
+                            msg = "Edge WebDriver下载后仍无法启动。"
+                            self.output_signal.emit(msg)
+                            return False, msg
+                    except Exception as download_e:
+                        msg = (f"Edge WebDriver下载失败: {str(download_e)}，请手动配置。"
+                               "下载链接: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
+                        self.output_signal.emit(msg)
+                        return False, msg
+                else:
+                    # 如果不是最后一次尝试，继续循环
+                    continue
+            except Exception as e:
+                self.output_signal.emit(f"启动过程中出现未知异常: {str(e)}")
+                if attempt < 2:
+                    continue
+                else:
+                    return False, f"无法启动Edge WebDriver: {str(e)}"
+
+        # 如果所有尝试都失败
+        return False, "多次尝试后仍无法启动Edge WebDriver"
 
     def create_edge_driver_with_timeout(self, options, service=None, timeout=10):
         """并发启动Edge WebDriver，如超时则返回None"""
