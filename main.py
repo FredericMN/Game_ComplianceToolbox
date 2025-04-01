@@ -11,6 +11,8 @@ from utils.task_manager import task_manager
 import tempfile
 import glob
 import shutil
+import subprocess
+import time
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -29,6 +31,35 @@ def cleanup_webdriver_temp_files():
         patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
         removed_count = 0
         
+        # 首先彻底终止所有msedgedriver进程
+        try:
+            # 使用taskkill强制终止所有msedgedriver进程
+            subprocess.call('taskkill /f /im msedgedriver.exe', shell=True, 
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 等待一小段时间确保进程真正终止
+            time.sleep(0.5)
+            
+            # 再确认一次是否有残留进程并强制终止
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info.get('name') and 'msedgedriver' in proc.info.get('name').lower():
+                        proc.kill()
+                except:
+                    pass
+        except:
+            pass
+            
+        # 也尝试清理可能存在的Edge浏览器进程
+        try:
+            subprocess.call('taskkill /f /im msedge.exe', shell=True, 
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
+        
+        # 等待一段时间确保进程完全释放文件锁
+        time.sleep(1)
+        
+        # 现在清理临时文件
         for pattern in patterns:
             for path in glob.glob(os.path.join(temp_dir, pattern)):
                 try:
@@ -38,16 +69,16 @@ def cleanup_webdriver_temp_files():
                 except Exception as e:
                     print(f"清理临时目录失败: {path}, 错误: {str(e)}")
         
-        # 尝试终止遗留的msedgedriver进程
+        # 再次确认是否有残留的msedgedriver进程
         terminated = False
         for proc in psutil.process_iter(['pid', 'name']):
             try:
-                if proc.info.get('name') and proc.info.get('name').lower() == 'msedgedriver.exe':
+                if proc.info.get('name') and 'msedgedriver' in proc.info.get('name').lower():
                     try:
                         proc.terminate()
                         proc.wait(timeout=1)
                         terminated = True
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired):
+                    except:
                         try:
                             proc.kill()
                             terminated = True
@@ -64,6 +95,9 @@ def cleanup_webdriver_temp_files():
 def main():
     # 应用启动时先执行一次全局清理
     cleanup_webdriver_temp_files()
+    
+    # 稍等一段时间以确保资源完全释放
+    time.sleep(1)
     
     app = QApplication(sys.argv)
     
