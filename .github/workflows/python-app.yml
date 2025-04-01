@@ -83,46 +83,41 @@ jobs:
       run: |
         # 创建models目录
         $modelsDir = "models"
-        New-Item -Path $modelsDir -ItemType Directory -Force
-
-        # 定义模型仓库名并创建对应目录
-        $modelRepoName = "alibaba-pai_pai-bert-base-zh-llm-risk-detection"
-        $modelDir = Join-Path -Path $modelsDir -ChildPath $modelRepoName
+        $modelName = "alibaba-pai/pai-bert-base-zh-llm-risk-detection"
+        $modelNameFormatted = $modelName.Replace("/", "_")
+        $modelDir = Join-Path -Path $modelsDir -ChildPath $modelNameFormatted
+        
+        # 创建目录
+        Write-Output "创建模型目录: $modelDir"
         New-Item -Path $modelDir -ItemType Directory -Force
-
-        # 创建临时脚本来下载模型
-        $scriptContent = @'
-        import os
-        from huggingface_hub import hf_hub_download, HfApi
         
-        MODEL_NAME = "alibaba-pai/pai-bert-base-zh-llm-risk-detection"
-        MODEL_PATH = "models"
-        
-        # 下载模型文件
-        api = HfApi()
-        model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace("/", "_"))
-        if not os.path.exists(model_dir):
-            os.makedirs(model_dir)
-        
-        # 获取仓库中的所有文件
-        repo_files = api.list_repo_files(repo_id=MODEL_NAME)
-        revision = "main"
-        
-        for file_name in repo_files:
-            print(f"Downloading {file_name}...")
-            local_file_path = os.path.join(model_dir, file_name)
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            hf_hub_download(repo_id=MODEL_NAME, filename=file_name, local_dir=model_dir, local_dir_use_symlinks=False)
-            print(f"Downloaded {file_name}")
-        
-        print("All model files downloaded successfully!")
-'@
-        
-        $scriptContent | Out-File -FilePath "download_model.py" -Encoding utf8
-        
-        # 安装必要的包并运行脚本
+        # 安装必要的Python包
         pip install huggingface_hub
-        python download_model.py
+        
+        # 使用PowerShell调用Python命令行下载模型
+        Write-Output "开始下载模型文件..."
+        
+        # 列出要下载的文件
+        $files = python -c "from huggingface_hub import HfApi; api = HfApi(); print('\n'.join(api.list_repo_files('$modelName')))"
+        $fileList = $files -split "`n"
+        
+        Write-Output "需要下载 $($fileList.Count) 个文件"
+        
+        # 下载每个文件
+        foreach ($file in $fileList) {
+            if ([string]::IsNullOrWhiteSpace($file)) { continue }
+            
+            Write-Output "正在下载: $file"
+            # 使用Python下载文件
+            python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='$modelName', filename='$file', local_dir='$modelsDir', local_dir_use_symlinks=False)"
+            Write-Output "下载完成: $file"
+        }
+        
+        Write-Output "所有模型文件下载完成！"
+        
+        # 列出已下载的文件
+        Write-Output "已下载的文件列表:"
+        Get-ChildItem -Path $modelDir -Recurse | Select-Object FullName
 
     # 设置标准构建环境
     - name: Set up Standard Build Environment
