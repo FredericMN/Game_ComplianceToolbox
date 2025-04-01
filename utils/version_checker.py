@@ -26,12 +26,32 @@ class VersionChecker:
                 response = requests.get(url, timeout=(3.05, 30),
                                       headers={'Accept': 'application/vnd.github+json'},
                                       params={'per_page': 1})
-                response.raise_for_status()
+                # 不直接使用 raise_for_status，改为检查状态码
+                if response.status_code >= 400:
+                    # 记录错误但不抛出异常
+                    print(f"版本检查请求失败，状态码: {response.status_code}")
+                    if attempt == 2:  # 最后一次尝试
+                        return False
+                    time.sleep(2 ** attempt)
+                    continue
                 
-                data = response.json()
+                # 解析数据前检查内容是否为JSON
+                try:
+                    data = response.json()
+                except ValueError:
+                    print("服务器响应不是有效的JSON格式")
+                    if attempt == 2:
+                        return False
+                    time.sleep(2 ** attempt)
+                    continue
+                
                 # 增加字段校验
                 if not all(key in data for key in ['tag_name', 'assets', 'body']):
-                    raise ValueError("无效的API响应格式")
+                    print("无效的API响应格式，缺少必要字段")
+                    if attempt == 2:
+                        return False
+                    time.sleep(2 ** attempt)
+                    continue
                 
                 self.latest_version = data['tag_name'].lstrip('v')
                 self.assets = data['assets']
@@ -39,14 +59,25 @@ class VersionChecker:
                 return True
                 
             except requests.exceptions.RequestException as e:
+                print(f"请求异常: {str(e)}")
                 if attempt == 2:
-                    raise
+                    return False
                 time.sleep(2 ** attempt)  # 指数退避重试
+            except Exception as e:
+                print(f"版本检查过程中发生未预期的异常: {str(e)}")
+                if attempt == 2:
+                    return False
+                time.sleep(2 ** attempt)
+        
+        return False  # 所有尝试都失败
 
     def is_new_version_available(self):
         try:
             if not self.latest_version:
-                self.check_latest_version()
+                success = self.check_latest_version()
+                if not success:
+                    return False  # 如果检查版本失败，直接返回没有新版本
+                
             return version.parse(self.latest_version) > version.parse(self.current_version)
         except Exception as e:
             print(f"版本比较错误: {str(e)}")
@@ -97,6 +128,7 @@ class VersionCheckWorker(QObject):
             self.finished.emit(*result)
             
         except Exception as e:
+            print(f"版本检查工作线程异常: {str(e)}")  # 添加日志以便调试
             self.progress.emit(f"检查更新失败: {str(e)}")
             self.finished.emit(False, None, None, None, None)
 
@@ -107,22 +139,34 @@ class VersionCheckWorker(QObject):
         
         def target():
             try:
-                self.version_checker.check_latest_version()
+                success = self.version_checker.check_latest_version()
+                if not success:
+                    # 如果版本检查失败，直接设置结果并返回
+                    print("版本检查失败，返回默认结果")
+                    result[:] = [False, None, None, None, None]
+                    return
+                
                 if self.version_checker.is_new_version_available():
                     cpu_url, gpu_url = self.version_checker.get_download_urls()
                     result[:] = [True, self.version_checker.latest_version, 
                                 cpu_url, gpu_url, self.version_checker.release_notes]
             except Exception as e:
-                raise
+                # 捕获并记录异常，但不再抛出
+                print(f"版本检查线程内部异常: {str(e)}")
+                result[:] = [False, None, None, None, None]
             finally:
                 event.set()
                 
         thread = threading.Thread(target=target)
+        thread.daemon = True  # 设置为守护线程，避免主程序退出时线程还在运行
         thread.start()
-        event.wait(timeout)
         
-        if not event.is_set():
-            raise TimeoutError("操作超时")
+        # 等待线程完成或超时
+        is_set = event.wait(timeout)
+        if not is_set:
+            print("版本检查超时")
+            # 如果超时，不抛出异常，只返回默认结果
+            return [False, None, None, None, None]
             
         return result
 

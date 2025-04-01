@@ -19,6 +19,7 @@ import uuid    # 导入uuid用于生成唯一ID
 import tempfile
 import glob
 import random
+import datetime
 
 
 class EnvironmentChecker(QObject):
@@ -30,6 +31,9 @@ class EnvironmentChecker(QObject):
     structured_result_signal = Signal(list)
     # 检测完成
     finished = Signal(bool)  # 参数表示是否有错误
+    
+    # 设置最大保留的临时目录数量，防止过度膨胀
+    MAX_TEMP_DIRS = 20
 
     def __init__(self):
         super().__init__()
@@ -49,6 +53,9 @@ class EnvironmentChecker(QObject):
             ("Edge浏览器检测", self.check_edge_browser),
             ("Edge WebDriver检测", self.check_edge_driver)
         ]
+        
+        # 当前运行时创建的临时目录列表，用于在结束时清理
+        self.current_temp_dirs = []
     
     def pre_cleanup(self):
         """应用启动时的预清理，确保没有残留的驱动进程和临时目录"""
@@ -57,19 +64,8 @@ class EnvironmentChecker(QObject):
             self.kill_msedgedriver()
             
             # 清理所有可能存在的临时目录
-            temp_dir = tempfile.gettempdir()
-            patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
+            self.cleanup_temp_directories(enforce_limit=True)
             
-            for pattern in patterns:
-                for path in glob.glob(os.path.join(temp_dir, pattern)):
-                    try:
-                        if os.path.isdir(path):
-                            shutil.rmtree(path, ignore_errors=True)
-                    except Exception:
-                        pass
-            
-            # 减少等待时间，避免UI阻塞
-            # time.sleep(1)
         except Exception:
             pass
 
@@ -77,6 +73,7 @@ class EnvironmentChecker(QObject):
         """依次执行所有检测项，可考虑并发，但量少时顺序即可。"""
         # 确保每次运行前清空结果列表
         self.structured_results = []
+        self.current_temp_dirs = []  # 重置当前运行时创建的临时目录列表
         
         try:
             # 在后台线程中执行预清理，不阻塞UI
@@ -102,6 +99,11 @@ class EnvironmentChecker(QObject):
             self.structured_result_signal.emit(self.structured_results)
             self.finished.emit(self.has_errors)
 
+    def register_temp_dir(self, dir_path):
+        """注册临时目录，以便在结束时清理"""
+        if dir_path and os.path.isdir(dir_path):
+            self.current_temp_dirs.append(dir_path)
+            
     def cleanup_resources(self):
         """清理所有资源，包括WebDriver和msedgedriver进程"""
         # 关闭WebDriver
@@ -113,25 +115,66 @@ class EnvironmentChecker(QObject):
         # 清理临时用户数据目录
         cleaned_dirs = 0
         failed_dirs = 0
+        
+        # 先清理本次运行创建的目录
+        for dir_path in self.current_temp_dirs:
+            if dir_path and os.path.isdir(dir_path):
+                try:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+                    cleaned_dirs += 1
+                except Exception as e:
+                    failed_dirs += 1
+                    self.output_signal.emit(f"清理临时目录失败: {dir_path}, 错误: {str(e)}")
+        
+        # 然后清理其他可能存在的临时目录，并限制总数
         try:
-            import tempfile
-            import glob
-            import shutil
-            
-            # 查找并删除所有edge_driver_*临时目录
-            pattern = os.path.join(tempfile.gettempdir(), "edge_driver_*")
-            for dir_path in glob.glob(pattern):
-                if os.path.isdir(dir_path):
-                    try:
-                        shutil.rmtree(dir_path, ignore_errors=True)
-                        cleaned_dirs += 1
-                    except Exception as e:
-                        failed_dirs += 1
-                        self.output_signal.emit(f"清理临时目录失败: {dir_path}, 错误: {str(e)}")
-            if cleaned_dirs > 0 or failed_dirs > 0:
-                self.output_signal.emit(f"环境清理：已清理 {cleaned_dirs} 个临时目录，失败 {failed_dirs} 个。")
+            self.cleanup_temp_directories(enforce_limit=True)
         except Exception as e:
             self.output_signal.emit(f"清理临时目录时出错: {str(e)}")
+            
+        if cleaned_dirs > 0 or failed_dirs > 0:
+            self.output_signal.emit(f"环境清理：已清理 {cleaned_dirs} 个临时目录，失败 {failed_dirs} 个。")
+
+    def cleanup_temp_directories(self, enforce_limit=False):
+        """清理所有可能的临时目录，可选择限制总数"""
+        try:
+            temp_dir = tempfile.gettempdir()
+            patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
+            
+            if enforce_limit:
+                # 如果需要强制限制目录总数，收集所有匹配的目录及其修改时间
+                all_dirs = []
+                for pattern in patterns:
+                    for path in glob.glob(os.path.join(temp_dir, pattern)):
+                        try:
+                            if os.path.isdir(path):
+                                # 获取目录修改时间
+                                mtime = os.path.getmtime(path)
+                                all_dirs.append((path, mtime))
+                        except Exception:
+                            pass
+                
+                # 如果目录数超过限制，按修改时间排序，保留最新的
+                if len(all_dirs) > self.MAX_TEMP_DIRS:
+                    # 按修改时间从新到旧排序
+                    all_dirs.sort(key=lambda x: x[1], reverse=True)
+                    # 只保留最新的MAX_TEMP_DIRS个，删除其余的
+                    for path, _ in all_dirs[self.MAX_TEMP_DIRS:]:
+                        try:
+                            shutil.rmtree(path, ignore_errors=True)
+                        except Exception:
+                            pass
+            else:
+                # 如果不需要限制总数，直接清理本次检测前存在的目录
+                for pattern in patterns:
+                    for path in glob.glob(os.path.join(temp_dir, pattern)):
+                        try:
+                            if os.path.isdir(path) and path not in self.current_temp_dirs:
+                                shutil.rmtree(path, ignore_errors=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def quit_driver(self):
         """安全地关闭WebDriver"""
@@ -313,204 +356,6 @@ class EnvironmentChecker(QObject):
         self.output_signal.emit("无法配置Edge WebDriver，请检查Edge浏览器安装或网络连接。")
         return False, "所有WebDriver启动策略均失败。"
 
-    def cleanup_temp_directories(self):
-        """清理所有可能的临时目录"""
-        try:
-            temp_dir = tempfile.gettempdir()
-            patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
-            
-            for pattern in patterns:
-                for path in glob.glob(os.path.join(temp_dir, pattern)):
-                    try:
-                        if os.path.isdir(path):
-                            shutil.rmtree(path, ignore_errors=True)
-                    except Exception:
-                        pass
-            
-            # 移除等待，避免UI阻塞
-            # if cleaned > 0:
-            #     time.sleep(1)
-        except Exception:
-            pass
-
-    def _try_edge_headless_incognito(self, driver_path=None):
-        """策略1: 使用无头浏览器和隐私模式，不使用用户数据目录"""
-        unique_id = uuid.uuid4().hex  # 生成唯一ID
-        options = Options()
-        options.use_chromium = True
-        options.add_argument("--headless")
-        options.add_argument("--incognito")  # 隐私模式
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--no-first-run")
-        options.add_argument("--disable-application-cache")
-        options.add_argument("--disable-web-security")
-        options.add_argument(f"--user-agent=Mozilla/5.0 AppleWebKit/537.36 Chrome/{self.edge_version}")
-        
-        try:
-            if driver_path:
-                service = EdgeService(executable_path=driver_path)
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            else:
-                service = EdgeService()
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            
-            return driver is not None, driver
-        except Exception as e:
-            self.output_signal.emit(f"策略1启动失败: {str(e)}")
-            return False, None
-
-    def _try_edge_with_unique_profile(self, driver_path=None):
-        """策略2: 使用唯一临时配置文件"""
-        unique_id = uuid.uuid4().hex
-        timestamp = int(time.time())
-        # 使用时间戳和UUID确保唯一性
-        temp_dir = os.path.join(tempfile.gettempdir(), f"edge_temp_{timestamp}_{unique_id}")
-        
-        try:
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            options = Options()
-            options.use_chromium = True
-            options.add_argument("--headless")
-            options.add_argument(f"--user-data-dir={temp_dir}")
-            options.add_argument("--profile-directory=TestProfile")
-            options.add_argument("--disable-extensions")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-application-cache")
-            
-            if driver_path:
-                service = EdgeService(executable_path=driver_path)
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            else:
-                service = EdgeService()
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            
-            return driver is not None, driver
-        except Exception as e:
-            self.output_signal.emit(f"策略2启动失败: {str(e)}")
-            # 确保在失败时清理
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
-            return False, None
-
-    def _try_edge_with_random_port(self, driver_path=None):
-        """策略3: 使用随机端口和唯一目录"""
-        port = random.randint(9000, 9999)
-        unique_id = uuid.uuid4().hex
-        timestamp = int(time.time())
-        temp_dir = os.path.join(tempfile.gettempdir(), f"edge_port_{timestamp}_{unique_id}")
-        
-        try:
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            options = Options()
-            options.use_chromium = True
-            options.add_argument("--headless")
-            options.add_argument(f"--user-data-dir={temp_dir}")
-            options.add_argument(f"--remote-debugging-port={port}")
-            options.add_argument("--disable-extensions")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            
-            # 确保 EdgeService 已导入
-            from selenium.webdriver.edge.service import Service as EdgeService
-            
-            if driver_path:
-                service = EdgeService(executable_path=driver_path)
-                service.port = port  # 设置服务端口
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            else:
-                service = EdgeService(port=port)
-                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
-            
-            return driver is not None, driver
-        except Exception as e:
-            self.output_signal.emit(f"策略3启动失败: {str(e)}")
-            # 确保在失败时清理
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
-            return False, None
-
-    def _try_edge_with_alternative_service(self, driver_path=None):
-        """策略4: 使用替代服务启动方式"""
-        try:
-            # 生成随机端口和唯一临时目录
-            port = random.randint(9000, 9999)
-            unique_id = uuid.uuid4().hex
-            timestamp = int(time.time())
-            temp_dir = os.path.join(tempfile.gettempdir(), f"edge_alt_{timestamp}_{unique_id}")
-            
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 手动启动msedgedriver进程
-            if not driver_path:
-                try:
-                    from webdriver_manager.microsoft import EdgeChromiumDriverManager
-                    driver_path = EdgeChromiumDriverManager().install()
-                except Exception as e:
-                    self.output_signal.emit(f"获取驱动路径失败: {str(e)}")
-                    return False, None
-            
-            # 启动后台进程
-            try:
-                process = subprocess.Popen(
-                    [driver_path, f"--port={port}"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                
-                # 给服务一些启动时间
-                time.sleep(0.5)
-            except Exception as e:
-                self.output_signal.emit(f"启动驱动服务失败: {str(e)}")
-                return False, None
-            
-            # 配置WebDriver连接到已运行的服务
-            try:
-                options = Options()
-                options.use_chromium = True
-                options.add_argument("--headless")
-                options.add_argument(f"--user-data-dir={temp_dir}")
-                options.add_argument("--disable-extensions")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--no-sandbox")
-                
-                # 直接连接到已运行的msedgedriver
-                driver = webdriver.Remote(
-                    command_executor=f'http://localhost:{port}',
-                    options=options
-                )
-                
-                # 保存进程引用以便稍后清理
-                driver._msedgedriver_process = process
-                
-                return True, driver
-            except Exception as e:
-                self.output_signal.emit(f"连接到驱动服务失败: {str(e)}")
-                # 确保进程被终止
-                if 'process' in locals():
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
-                # 确保在失败时清理
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception:
-                    pass
-                return False, None
-        except Exception as e:
-            self.output_signal.emit(f"策略4整体失败: {str(e)}")
-            return False, None
-
     def kill_all_browser_processes(self):
         """彻底清理所有浏览器和WebDriver相关进程"""
         # 先清理msedgedriver进程
@@ -599,3 +444,187 @@ class EnvironmentChecker(QObject):
         except Exception as e:
             # self.output_signal.emit(f"从注册表获取Edge版本失败: {str(e)}") # 改为在调用处处理
             raise Exception(f"从注册表获取Edge版本失败: {str(e)}")
+
+    def _try_edge_headless_incognito(self, driver_path=None):
+        """策略1: 使用无头浏览器和隐私模式，不使用用户数据目录"""
+        unique_id = uuid.uuid4().hex  # 生成唯一ID
+        options = Options()
+        options.use_chromium = True
+        options.add_argument("--headless")
+        options.add_argument("--incognito")  # 隐私模式
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-first-run")
+        options.add_argument("--disable-application-cache")
+        options.add_argument("--disable-web-security")
+        options.add_argument(f"--user-agent=Mozilla/5.0 AppleWebKit/537.36 Chrome/{self.edge_version}")
+        
+        try:
+            if driver_path:
+                service = EdgeService(executable_path=driver_path)
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            else:
+                service = EdgeService()
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            
+            return driver is not None, driver
+        except Exception as e:
+            self.output_signal.emit(f"策略1启动失败: {str(e)}")
+            return False, None
+
+    def _try_edge_with_unique_profile(self, driver_path=None):
+        """策略2: 使用唯一临时配置文件"""
+        unique_id = uuid.uuid4().hex
+        timestamp = int(time.time())
+        # 使用时间戳和UUID确保唯一性
+        temp_dir = os.path.join(tempfile.gettempdir(), f"edge_temp_{timestamp}_{unique_id}")
+        
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+            # 注册临时目录，以便在结束时清理
+            self.register_temp_dir(temp_dir)
+            
+            options = Options()
+            options.use_chromium = True
+            options.add_argument("--headless")
+            options.add_argument(f"--user-data-dir={temp_dir}")
+            options.add_argument("--profile-directory=TestProfile")
+            options.add_argument("--disable-extensions")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-application-cache")
+            
+            if driver_path:
+                service = EdgeService(executable_path=driver_path)
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            else:
+                service = EdgeService()
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            
+            return driver is not None, driver
+        except Exception as e:
+            self.output_signal.emit(f"策略2启动失败: {str(e)}")
+            # 确保在失败时清理
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return False, None
+
+    def _try_edge_with_random_port(self, driver_path=None):
+        """策略3: 使用随机端口和唯一目录"""
+        port = random.randint(9000, 9999)
+        unique_id = uuid.uuid4().hex
+        timestamp = int(time.time())
+        temp_dir = os.path.join(tempfile.gettempdir(), f"edge_port_{timestamp}_{unique_id}")
+        
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+            # 注册临时目录，以便在结束时清理
+            self.register_temp_dir(temp_dir)
+            
+            options = Options()
+            options.use_chromium = True
+            options.add_argument("--headless")
+            options.add_argument(f"--user-data-dir={temp_dir}")
+            options.add_argument(f"--remote-debugging-port={port}")
+            options.add_argument("--disable-extensions")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            
+            # 确保 EdgeService 已导入
+            from selenium.webdriver.edge.service import Service as EdgeService
+            
+            if driver_path:
+                service = EdgeService(executable_path=driver_path)
+                service.port = port  # 设置服务端口
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            else:
+                service = EdgeService(port=port)
+                driver = self.create_edge_driver_with_timeout(options, service=service, timeout=10)
+            
+            return driver is not None, driver
+        except Exception as e:
+            self.output_signal.emit(f"策略3启动失败: {str(e)}")
+            # 确保在失败时清理
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return False, None
+
+    def _try_edge_with_alternative_service(self, driver_path=None):
+        """策略4: 使用替代服务启动方式"""
+        try:
+            # 生成随机端口和唯一临时目录
+            port = random.randint(9000, 9999)
+            unique_id = uuid.uuid4().hex
+            timestamp = int(time.time())
+            temp_dir = os.path.join(tempfile.gettempdir(), f"edge_alt_{timestamp}_{unique_id}")
+            
+            os.makedirs(temp_dir, exist_ok=True)
+            # 注册临时目录，以便在结束时清理
+            self.register_temp_dir(temp_dir)
+            
+            # 手动启动msedgedriver进程
+            if not driver_path:
+                try:
+                    from webdriver_manager.microsoft import EdgeChromiumDriverManager
+                    driver_path = EdgeChromiumDriverManager().install()
+                except Exception as e:
+                    self.output_signal.emit(f"获取驱动路径失败: {str(e)}")
+                    return False, None
+            
+            # 启动后台进程
+            try:
+                process = subprocess.Popen(
+                    [driver_path, f"--port={port}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # 给服务一些启动时间
+                time.sleep(0.5)
+            except Exception as e:
+                self.output_signal.emit(f"启动驱动服务失败: {str(e)}")
+                return False, None
+            
+            # 配置WebDriver连接到已运行的服务
+            try:
+                options = Options()
+                options.use_chromium = True
+                options.add_argument("--headless")
+                options.add_argument(f"--user-data-dir={temp_dir}")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--no-sandbox")
+                
+                # 直接连接到已运行的msedgedriver
+                driver = webdriver.Remote(
+                    command_executor=f'http://localhost:{port}',
+                    options=options
+                )
+                
+                # 保存进程引用以便稍后清理
+                driver._msedgedriver_process = process
+                
+                return True, driver
+            except Exception as e:
+                self.output_signal.emit(f"连接到驱动服务失败: {str(e)}")
+                # 确保进程被终止
+                if 'process' in locals():
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                # 确保在失败时清理
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                return False, None
+        except Exception as e:
+            self.output_signal.emit(f"策略4整体失败: {str(e)}")
+            return False, None
