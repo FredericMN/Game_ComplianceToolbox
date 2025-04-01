@@ -357,7 +357,9 @@ class SettingsInterface(BaseInterface):
 
         self.update_thread = QThread()
         self.version_checker = VersionChecker()
-        self.worker = VersionCheckWorker(self.version_checker)
+        
+        # 使用强制检查模式，忽略缓存
+        self.worker = VersionCheckWorker(self.version_checker, force_check=True)
         self.worker.moveToThread(self.update_thread)
 
         self.update_thread.started.connect(self.worker.run)
@@ -369,7 +371,26 @@ class SettingsInterface(BaseInterface):
 
         self.worker.progress.connect(self.report_progress)
 
-        self.update_thread.start()
+        # 添加超时处理
+        self.update_timeout_timer = QTimer()
+        self.update_timeout_timer.setSingleShot(True)
+        self.update_timeout_timer.timeout.connect(self.handle_update_timeout)
+        self.update_timeout_timer.start(60000)  # 60秒超时
+        
+        try:
+            self.update_thread.start()
+        except Exception as e:
+            self.output_text_edit.append(f"启动更新检查失败: {str(e)}")
+            self.check_update_button.setEnabled(True)
+            self.update_timeout_timer.stop()
+            
+    def handle_update_timeout(self):
+        """处理版本检查超时"""
+        if self.update_thread and self.update_thread.isRunning():
+            self.output_text_edit.append("版本检查超时，请检查网络连接")
+            self.update_thread.quit()
+            self.update_thread.wait(1000)  # 等待最多1秒
+            self.check_update_button.setEnabled(True)
 
     def _clear_thread_reference(self, thread_name):
         """线程清理时断开所有信号"""
@@ -386,6 +407,10 @@ class SettingsInterface(BaseInterface):
 
     def on_update_check_finished(self, is_new_version, latest_version, cpu_download_url, gpu_download_url, release_notes):
         """处理版本检测完成后的逻辑"""
+        # 停止超时计时器
+        if hasattr(self, 'update_timeout_timer') and self.update_timeout_timer.isActive():
+            self.update_timeout_timer.stop()
+            
         if is_new_version:
             # 使用自定义对话框让用户选择下载版本，并在对话框中显示版本信息
             version_info = f"""当前版本: {self.current_version}
@@ -450,6 +475,12 @@ class SettingsInterface(BaseInterface):
         self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.finished.connect(lambda: self.cleanup_download_resources())
         
+        # 设置下载超时计时器
+        self.download_timeout_timer = QTimer()
+        self.download_timeout_timer.setSingleShot(True)
+        self.download_timeout_timer.timeout.connect(self.handle_download_timeout)
+        self.download_timeout_timer.start(300000)  # 5分钟超时
+        
         # 更新UI状态
         self.download_progress_bar.setValue(0)
         self.download_progress_bar.setVisible(True)
@@ -462,11 +493,31 @@ class SettingsInterface(BaseInterface):
         self.download_button_box.addButton(cancel_button, QDialogButtonBox.RejectRole)
         
         # 开始下载
-        self.download_thread.start()
-        self.output_text_edit.append(f"开始下载 {filename}...")
-
+        try:
+            self.download_thread.start()
+            self.output_text_edit.append(f"开始下载 {filename}...")
+        except Exception as e:
+            self.output_text_edit.append(f"启动下载线程失败: {str(e)}")
+            self.cleanup_download_resources()
+            self.check_update_button.setEnabled(True)
+            
+    def handle_download_timeout(self):
+        """处理下载超时"""
+        if self.download_worker and self.download_thread and self.download_thread.isRunning():
+            self.output_text_edit.append("下载超时，自动取消")
+            self.cancel_download()
+            
+            # 确保UI恢复
+            self.download_progress_bar.setVisible(False)
+            self.check_update_button.setEnabled(True)
+            QMessageBox.warning(self, "下载超时", "下载超时，请检查网络连接后重试。")
+            
     def cleanup_download_resources(self):
         """清理下载相关资源"""
+        # 停止超时计时器
+        if hasattr(self, 'download_timeout_timer') and self.download_timeout_timer.isActive():
+            self.download_timeout_timer.stop()
+            
         if self.download_thread and self.download_thread.isRunning():
             self.download_thread.quit()
             self.download_thread.wait()
