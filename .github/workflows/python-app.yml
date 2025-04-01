@@ -91,16 +91,16 @@ jobs:
         New-Item -Path $modelDir -ItemType Directory -Force
 
         # 创建临时脚本来下载模型
-        $scriptContent = @"
+        $scriptContent = @'
         import os
         from huggingface_hub import hf_hub_download, HfApi
         
-        MODEL_NAME = 'alibaba-pai/pai-bert-base-zh-llm-risk-detection'
-        MODEL_PATH = 'models'
+        MODEL_NAME = "alibaba-pai/pai-bert-base-zh-llm-risk-detection"
+        MODEL_PATH = "models"
         
         # 下载模型文件
         api = HfApi()
-        model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
+        model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace("/", "_"))
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
         
@@ -116,7 +116,8 @@ jobs:
             print(f"Downloaded {file_name}")
         
         print("All model files downloaded successfully!")
-"@
+'@
+        
         $scriptContent | Out-File -FilePath "download_model.py" -Encoding utf8
         
         # 安装必要的包并运行脚本

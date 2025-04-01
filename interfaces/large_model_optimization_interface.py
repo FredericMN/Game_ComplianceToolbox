@@ -51,6 +51,7 @@ class LargeModelOptimizationInterface(BaseInterface):
     """大模型文本正向优化界面"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.system_prompt = ''  # 确保初始化为空字符串
         self.init_ui()
         self.load_system_prompt()
 
