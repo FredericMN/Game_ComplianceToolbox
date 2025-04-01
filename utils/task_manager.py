@@ -84,42 +84,50 @@ class TaskManager:
 
         # --- Kill Lingering Driver Processes ---
         print("开始清理 msedgedriver 进程...")
+        # 不再尝试从 main 导入，直接使用 psutil 清理
         try:
-            # Ensure kill_msedgedriver from main is used if possible
-            from main import kill_msedgedriver 
-            killed_count = kill_msedgedriver()
-            if not killed_count:
-                 print("未找到或未能终止 msedgedriver 进程 (使用 main.kill_msedgedriver)。")
-        except ImportError:
-            print("无法从 main 导入 kill_msedgedriver, 使用备用清理...")
-            try:
-                import psutil
-                terminated_count = 0
-                for proc in psutil.process_iter(['pid', 'name']):
-                    try:
-                        p_name = proc.info['name']
-                        if p_name and p_name.lower() == 'msedgedriver.exe':
-                            print(f"  找到 msedgedriver 进程 (PID: {proc.info['pid']}), 尝试终止...")
+            import psutil
+            terminated_count = 0
+            failed_count = 0
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    p_name = proc.info.get('name') # 使用 get 避免 KeyError
+                    p_pid = proc.info.get('pid')
+                    if p_name and p_name.lower() == 'msedgedriver.exe':
+                        print(f"  找到 msedgedriver 进程 (PID: {p_pid}), 尝试终止...")
+                        try:
+                            # 先尝试温和终止
                             proc.terminate()
-                            try:
-                                proc.wait(timeout=2) # Wait briefly
-                                print(f"    进程 (PID: {proc.info['pid']}) 已终止。")
-                                terminated_count += 1
-                            except psutil.TimeoutExpired:
-                                print(f"    进程 (PID: {proc.info['pid']}) 未在2秒内终止，强制终止...")
+                            # 等待最多2秒
+                            gone, alive = psutil.wait_procs([proc], timeout=2)
+                            if proc in alive:
+                                print(f"    进程 (PID: {p_pid}) 未在2秒内终止，强制终止...")
                                 proc.kill()
-                                terminated_count += 1
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                        pass # Process already gone or inaccessible
-                    except Exception as proc_err:
-                         print(f"    处理进程 {proc.info.get('pid', 'N/A')} 时出错: {proc_err}")
-                if terminated_count > 0:
-                     print(f"备用清理：已终止 {terminated_count} 个 msedgedriver 进程。")
-                else:
-                     print("备用清理：未找到或未能终止 msedgedriver 进程。")
+                            print(f"    进程 (PID: {p_pid}) 已终止。")
+                            terminated_count += 1
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                            # 进程可能已经消失或无权限访问
+                            print(f"    终止进程 (PID: {p_pid}) 时出错或进程已消失。")
+                            failed_count += 1
+                        except Exception as term_err:
+                             print(f"    终止进程 (PID: {p_pid}) 时出现意外错误: {term_err}")
+                             failed_count += 1
 
-            except Exception as e:
-                print(f"执行备用 msedgedriver 清理时出错: {str(e)}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass # Process already gone or inaccessible during iteration
+                except Exception as proc_err:
+                     print(f"    处理进程信息时出错 (PID: {proc.info.get('pid', 'N/A')}): {proc_err}")
+                     failed_count += 1 # 计入失败
+
+            if terminated_count > 0 or failed_count > 0:
+                 print(f"驱动进程清理：已终止 {terminated_count} 个，失败 {failed_count} 个。")
+            else:
+                 print("驱动进程清理：未找到活动的 msedgedriver 进程。")
+
+        except ImportError:
+            print("错误：无法导入 psutil 库，无法执行 msedgedriver 进程清理。请确保已安装 psutil。")
+        except Exception as e:
+            print(f"执行 msedgedriver 进程清理时出错: {str(e)}")
         
         with self.lock:        
             self.tasks_running = False # Mark tasks as no longer running

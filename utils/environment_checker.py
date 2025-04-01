@@ -78,6 +78,8 @@ class EnvironmentChecker(QObject):
         self.kill_msedgedriver()
         
         # 清理临时用户数据目录
+        cleaned_dirs = 0
+        failed_dirs = 0
         try:
             import tempfile
             import glob
@@ -89,9 +91,12 @@ class EnvironmentChecker(QObject):
                 if os.path.isdir(dir_path):
                     try:
                         shutil.rmtree(dir_path, ignore_errors=True)
-                        self.output_signal.emit(f"已清理临时目录: {dir_path}")
+                        cleaned_dirs += 1
                     except Exception as e:
+                        failed_dirs += 1
                         self.output_signal.emit(f"清理临时目录失败: {dir_path}, 错误: {str(e)}")
+            if cleaned_dirs > 0 or failed_dirs > 0:
+                self.output_signal.emit(f"环境清理：已清理 {cleaned_dirs} 个临时目录，失败 {failed_dirs} 个。")
         except Exception as e:
             self.output_signal.emit(f"清理临时目录时出错: {str(e)}")
 
@@ -125,7 +130,6 @@ class EnvironmentChecker(QObject):
                     # 使用taskkill命令强制终止所有msedgedriver进程
                     subprocess.call('taskkill /f /im msedgedriver.exe', shell=True, 
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.output_signal.emit("已使用系统命令尝试终止所有msedgedriver进程")
                 except Exception:
                     pass
             
@@ -145,7 +149,6 @@ class EnvironmentChecker(QObject):
                                 proc.kill()
                             
                             terminated_count += 1
-                            self.output_signal.emit(f"已终止 msedgedriver.exe (PID: {proc.info['pid']})")
                         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
                             failed_count += 1
                             self.output_signal.emit(f"终止 msedgedriver.exe (PID: {proc.info['pid']}) 时出错: {e}")
@@ -153,9 +156,9 @@ class EnvironmentChecker(QObject):
                     pass
             
             if terminated_count > 0 or failed_count > 0:
-                self.output_signal.emit(f"清理完成: 已终止 {terminated_count} 个msedgedriver进程, 失败 {failed_count} 个进程")
+                self.output_signal.emit(f"环境清理：已终止 {terminated_count} 个残留驱动进程，失败 {failed_count} 个。")
         except Exception as e:
-            self.output_signal.emit(f"清理msedgedriver进程时出现异常: {e}")
+            self.output_signal.emit(f"清理驱动进程时出现异常: {e}")
 
     def check_network(self):
         """检测网络连接"""
@@ -239,7 +242,7 @@ class EnvironmentChecker(QObject):
                     return True, "Edge WebDriver已正确配置。"
                     
             except Exception as e:
-                self.output_signal.emit(f"启动策略 {i+1} 失败: {str(e)}")
+                self.output_signal.emit(f"启动Edge WebDriver遇到问题: {str(e)}")
                 # 策略失败后清理环境
                 self.kill_all_browser_processes()
                 # 短暂延迟
@@ -247,9 +250,9 @@ class EnvironmentChecker(QObject):
         
         # 如果所有策略都失败，尝试下载新的WebDriver
         try:
-            self.output_signal.emit("尝试下载并使用新的Edge WebDriver...")
+            self.output_signal.emit("当前Edge WebDriver无法启动，尝试自动下载...")
             driver_path = EdgeChromiumDriverManager().install()
-            self.output_signal.emit(f"Edge WebDriver已下载: {driver_path}")
+            self.output_signal.emit(f"新的Edge WebDriver已下载: {driver_path}")
             
             # 再次尝试使用新下载的驱动和不同策略
             for i, strategy in enumerate(strategies):
@@ -259,18 +262,19 @@ class EnvironmentChecker(QObject):
                     
                     if result:
                         self.driver = driver
-                        self.output_signal.emit("Edge WebDriver下载并配置成功。")
+                        self.output_signal.emit("Edge WebDriver已自动下载并配置成功。")
                         return True, "Edge WebDriver下载并配置成功。"
                         
                 except Exception as e:
-                    self.output_signal.emit(f"使用新驱动的启动策略 {i+1} 失败: {str(e)}")
+                    self.output_signal.emit(f"使用新驱动启动Edge WebDriver失败: {str(e)}")
                     self.kill_all_browser_processes()
                     time.sleep(random.uniform(1.0, 2.0))
                 
         except Exception as e:
-            self.output_signal.emit(f"下载WebDriver失败: {str(e)}")
+            self.output_signal.emit(f"下载Edge WebDriver失败: {str(e)}")
             
         # 所有方法都失败
+        self.output_signal.emit("无法配置Edge WebDriver，请检查Edge浏览器安装或网络连接。")
         return False, "所有WebDriver启动策略均失败。"
 
     def _try_edge_without_user_data_dir(self, driver_path=None):
@@ -451,10 +455,10 @@ class EnvironmentChecker(QObject):
                 self.driver_future = None
                 return driver
             except concurrent.futures.TimeoutError:
-                self.output_signal.emit("启动Edge WebDriver超时")
+                self.output_signal.emit(f"启动Edge WebDriver超时 ({timeout}秒)")
                 return None
             except Exception as e:
-                self.output_signal.emit(f"启动Edge WebDriver时异常: {e}")
+                self.output_signal.emit(f"启动Edge WebDriver时发生错误: {e}")
                 return None
 
     def find_edge_executable(self):
