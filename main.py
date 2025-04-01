@@ -6,6 +6,8 @@ import psutil  # 导入 psutil 库
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 from window.main_window import MainWindow
+# 导入任务管理器
+from utils.task_manager import task_manager
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -51,7 +53,7 @@ def main():
     app = QApplication(sys.argv)
     
     # 连接 aboutToQuit 信号以在应用退出时清理
-    app.aboutToQuit.connect(kill_msedgedriver)
+    app.aboutToQuit.connect(task_manager.cleanup_all_resources)
     
     # 设置内置主题样式
     app.setStyle("Fusion")

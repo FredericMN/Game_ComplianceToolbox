@@ -1,5 +1,6 @@
 # utils/crawler.py
 
+import sys  # 确保导入sys模块
 import os
 import time
 import random
@@ -17,15 +18,30 @@ from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from PySide6.QtCore import Signal # Import Signal
+
+# 导入任务管理器
+from utils.task_manager import task_manager
 
 MAX_WORKERS = 3
 
 def progress_log_callback(callback, message):
-    """统一日志输出"""
+    """统一日志输出，处理Qt Signal"""
     if callback:
-        callback(message)
+        try:
+            # Check if it's a Qt Signal instance
+            if isinstance(callback, Signal):
+                callback.emit(message)
+            else:
+                # Assume it's a regular callable
+                callback(message)
+        except RuntimeError as e:
+            # Handle cases where the underlying Qt object might be destroyed
+            print(f"[Callback Error] {e}: {message}") 
+        except Exception as e:
+             print(f"[Callback Exception] {type(e).__name__}: {message}")
     else:
-        print(message)
+        print(message) # Fallback if no callback provided
 
 def random_delay(min_sec=0.5, max_sec=1.5):
     """避免爬取过快"""
@@ -116,6 +132,9 @@ def crawl_new_games(
             service=EdgeService(EdgeChromiumDriverManager().install()),
             options=opt
         )
+        # 注册WebDriver到任务管理器
+        task_manager.register_webdriver(driver)
+        
         results = []
         try:
             url = f"https://www.taptap.cn/app-calendar/{day_str}"
@@ -212,6 +231,8 @@ def crawl_new_games(
 
                 results.append( (name, status, man, types, rating) )
         finally:
+            # 取消注册并关闭WebDriver
+            task_manager.unregister_webdriver(driver)
             driver.quit()
         return (day_str, results)
 
@@ -219,41 +240,47 @@ def crawl_new_games(
 
     # 并发: 以天为粒度
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map={ executor.submit(crawl_one_day, d): d for d in date_list}
-        for future in as_completed(future_map):
-            d = future_map[future]
-            try:
-                day_str, day_data = future.result()
-            except Exception as e:
-                progress_log_callback(progress_callback, str(e))
+        # 注册线程池到任务管理器 
+        task_manager.register_thread_pool(executor)
+        try:
+            future_map={ executor.submit(crawl_one_day, d): d for d in date_list}
+            for future in as_completed(future_map):
+                d = future_map[future]
+                try:
+                    day_str, day_data = future.result()
+                except Exception as e:
+                    progress_log_callback(progress_callback, str(e))
+                    if progress_percent_callback:
+                        progress_percent_callback(100,0)
+                    return
+
+                if day_data:
+                    wb_cur=openpyxl.load_workbook(excel_filename)
+                    ws_cur=wb_cur.active
+                    block=[f"\n=== [日期 {day_str}, 共{len(day_data)} 款游戏] ==="]
+                    for (nm, st, man, ty, rt) in day_data:
+                        ws_cur.append([day_str,nm,st,man,ty,rt])
+                        block.append(
+                            f"  * {nm}\n"
+                            f"    状态：{st}\n"
+                            f"    厂商：{man}\n"
+                            f"    类型：{ty}\n"
+                            f"    评分：{rt}"
+                        )
+                    wb_cur.save(excel_filename)
+                    text="\n".join(block)
+                    progress_log_callback(progress_callback, text)
+                else:
+                    progress_log_callback(progress_callback,
+                        f"=== [日期 {day_str}] 无游戏信息 ===")
+
+                completed+=1
                 if progress_percent_callback:
-                    progress_percent_callback(100,0)
-                return
-
-            if day_data:
-                wb_cur=openpyxl.load_workbook(excel_filename)
-                ws_cur=wb_cur.active
-                block=[f"\n=== [日期 {day_str}, 共{len(day_data)} 款游戏] ==="]
-                for (nm, st, man, ty, rt) in day_data:
-                    ws_cur.append([day_str,nm,st,man,ty,rt])
-                    block.append(
-                        f"  * {nm}\n"
-                        f"    状态：{st}\n"
-                        f"    厂商：{man}\n"
-                        f"    类型：{ty}\n"
-                        f"    评分：{rt}"
-                    )
-                wb_cur.save(excel_filename)
-                text="\n".join(block)
-                progress_log_callback(progress_callback, text)
-            else:
-                progress_log_callback(progress_callback,
-                    f"=== [日期 {day_str}] 无游戏信息 ===")
-
-            completed+=1
-            if progress_percent_callback:
-                val=int(completed*100/total_dates)
-                progress_percent_callback(val,0)
+                    val=int(completed*100/total_dates)
+                    progress_percent_callback(val,0)
+        finally:
+            # 取消注册线程池
+            task_manager.unregister_thread_pool(executor)
 
     # 全部爬完后 => 对整个Excel按"日期"升序排序
     final_wb=openpyxl.load_workbook(excel_filename)
@@ -409,7 +436,7 @@ def match_version_numbers(
         if g_name in cache:
             return cache[g_name]
         
-        # 创建WebDriver时添加性能优化选项，但不使用无头模式
+        # 创建WebDriver时添加性能优化选项
         opt = webdriver.EdgeOptions()
         # 禁用不必要的功能以提高性能
         opt.add_argument('--disable-extensions')
@@ -423,6 +450,9 @@ def match_version_numbers(
                 service=EdgeService(EdgeChromiumDriverManager().install()),
                 options=opt
             )
+            # 注册WebDriver到任务管理器
+            task_manager.register_webdriver(driver)
+            
             # 设置页面加载超时
             driver.set_page_load_timeout(30)
             driver.set_script_timeout(30)
@@ -488,10 +518,12 @@ def match_version_numbers(
             res = None
         finally:
             if driver:
+                # 取消注册WebDriver 
+                task_manager.unregister_webdriver(driver)
                 try:
                     driver.quit()
                 except:
-                    pass  # 忽略关闭WebDriver可能出现的异常
+                    pass
 
         cache[g_name] = res
         return res
@@ -611,29 +643,35 @@ def match_version_numbers(
     max_workers = min(MAX_WORKERS, 2)  # 版号匹配时限制并发数
     
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        future_map = {}
-        for (r_idx, g_n) in game_list:
-            future = ex.submit(fetch_game_info, g_n)
-            future_map[future] = (r_idx, g_n)
+        # 注册线程池到任务管理器
+        task_manager.register_thread_pool(ex)
+        try:
+            future_map = {}
+            for (r_idx, g_n) in game_list:
+                future = ex.submit(fetch_game_info, g_n)
+                future_map[future] = (r_idx, g_n)
 
-        for future in as_completed(future_map):
-            row_i, g_na = future_map[future]
-            try:
-                info = future.result()
-            except Exception as e:
-                progress_log_callback(progress_callback, f"处理游戏 {g_na} 时出错: {str(e)}")
-                info = None
-            
-            results_map[row_i] = info
-            buffered.append((row_i, g_na, info))
-            completed += 1
-            
-            if len(buffered) >= partial_flush_size:
-                buffered = flush_results(buffered)
-            
-            if progress_percent_callback:
-                pr = int(completed * 100 / total_count)
-                progress_percent_callback(pr, stage)
+            for future in as_completed(future_map):
+                row_i, g_na = future_map[future]
+                try:
+                    info = future.result()
+                except Exception as e:
+                    progress_log_callback(progress_callback, f"处理游戏 {g_na} 时出错: {str(e)}")
+                    info = None
+                
+                results_map[row_i] = info
+                buffered.append((row_i, g_na, info))
+                completed += 1
+                
+                if len(buffered) >= partial_flush_size:
+                    buffered = flush_results(buffered)
+                
+                if progress_percent_callback:
+                    pr = int(completed * 100 / total_count)
+                    progress_percent_callback(pr, stage)
+        finally:
+            # 取消注册线程池 
+            task_manager.unregister_thread_pool(ex)
 
     if buffered:
         buffered = flush_results(buffered)
