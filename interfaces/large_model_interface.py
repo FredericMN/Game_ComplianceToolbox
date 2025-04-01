@@ -94,32 +94,32 @@ class LargeModelInterface(BaseInterface):
     """大模型语义分析界面"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.device = 'cpu'  # 默认设备为CPU
+        # 自动检测并设置GPU（如果可用）
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.init_ui()
 
     # 在 init_ui 方法中更新说明标签
     def init_ui(self):
         self.layout.setAlignment(Qt.AlignTop)
 
-        # 设备选择布局
+        # 设备状态显示（不再需要选择）
         device_layout = QHBoxLayout()
-        device_label = QLabel("选择设备:")
-        self.device_combo = QComboBox()
-        self.device_combo.addItem("CPU")
-        if torch.cuda.is_available():
-            self.device_combo.addItem("GPU")
+        device_label = QLabel("计算设备:")
+        self.device_status_label = QLabel()
+        
+        # 根据设备可用性设置显示内容
+        if self.device == 'cuda':
+            self.device_status_label.setText("GPU (已启用)")
         else:
-            self.device_combo.addItem("GPU (不可用)")
-            self.device_combo.setItemData(1, "GPU不可用", Qt.ToolTipRole)
-            self.device_combo.setEnabled(False)  # 如果GPU不可用，禁用选择
-
-        self.device_combo.currentIndexChanged.connect(self.handle_device_change)
+            self.device_status_label.setText("CPU (GPU不可用)")
+            
         device_layout.addWidget(device_label)
-        device_layout.addWidget(self.device_combo)
+        device_layout.addWidget(self.device_status_label)
+        device_layout.addStretch()
 
         # 上部区域：下载和配置大模型
         top_layout = QVBoxLayout()
-        top_layout.addLayout(device_layout)  # 添加设备选择到上部布局
+        top_layout.addLayout(device_layout)  # 添加设备状态显示到上部布局
 
         self.configure_button = PrimaryPushButton("检测并配置大模型环境")
         self.configure_button.clicked.connect(self.handle_configure)
@@ -183,15 +183,13 @@ class LargeModelInterface(BaseInterface):
         self.analysis_progress_list_widget = QListWidget()
 
         # 添加说明标签
-        explanation_label = QLabel(
-            "说明：仅支持Word文档与Excel表格进行分析。\n"
-            "分类标签及颜色标记如下：\n"
-            "• 正常（无标记）\n"
-            "• 低俗（绿色）\n"
-            "• 色情（黄色）\n"
-            "• 其他风险（红色）\n"
-            "• 成人（蓝色）"
-        )
+        explanation_text = "说明：仅支持Word文档与Excel表格进行分析。\n分类标签及颜色标记如下：\n• 正常（无标记）\n• 低俗（绿色）\n• 色情（黄色）\n• 其他风险（红色）\n• 成人（蓝色）"
+        
+        # 如果使用GPU，添加GPU加速提示
+        if self.device == 'cuda':
+            explanation_text += "\n\n已启用GPU加速，分析速度将大幅提升。"
+            
+        explanation_label = QLabel(explanation_text)
 
         # 将两个布局添加到主布局
         self.layout.addLayout(top_layout)
@@ -210,22 +208,9 @@ class LargeModelInterface(BaseInterface):
         bottom_layout.setStretch(1, 1)
         bottom_layout.setStretch(2, 4)  # 增加分析输出框的占比
 
-    def handle_device_change(self, index):
-        selected = self.device_combo.currentText()
-        if selected == "CPU":
-            self.device = 'cpu'
-        elif selected == "GPU":
-            if torch.cuda.is_available():
-                self.device = 'cuda'
-                QMessageBox.information(self, "提示", "恭喜，你可以使用GPU进行加速运算。")
-            else:
-                self.device = 'cpu'
-                QMessageBox.warning(self, "提示", "抱歉，当前环境无法使用GPU进行运算。")
-                self.device_combo.setCurrentText("CPU")  # 重置为CPU
-
     def handle_configure(self):
         """
-        处理“检测并配置大模型环境”按钮点击事件。
+        处理"检测并配置大模型环境"按钮点击事件。
         启动下载模型的工作线程，并连接信号。
         """
         # 检查模型是否已配置
@@ -280,7 +265,7 @@ class LargeModelInterface(BaseInterface):
 
     def handle_analyze(self):
         """
-        处理“选择文件并检测”按钮点击事件。
+        处理"选择文件并检测"按钮点击事件。
         先检查大模型是否已配置完成，如果完成则继续，否则提示用户先下载配置。
         """
         # 检查模型是否已配置

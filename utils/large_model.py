@@ -22,38 +22,75 @@ MODEL_PATH = os.path.join(os.getcwd(), "models")
 
 # 全局变量用于缓存模型
 _cached_classifier = None
+_model_dir = None  # 全局变量用于存储找到的模型目录
 
 
 def check_model_configured():
     """检查模型和分词器是否已下载并配置"""
-    global MODEL_PATH  # 确保在函数开始时声明全局变量
+    global MODEL_PATH, _model_dir  # 确保在函数开始时声明全局变量
     
     try:
-        # 如果当前是打包后的环境，则尝试在打包目录中查找模型
-        if getattr(sys, 'frozen', False):
-            # 获取应用程序的根目录
-            app_dir = os.path.dirname(sys.executable)
-            bundled_model_dir = os.path.join(app_dir, 'models', MODEL_NAME.replace('/', '_'))
-            logger.info(f"检查打包环境中的模型: {bundled_model_dir}")
-            
-            # 如果打包目录中存在模型，则使用打包目录中的模型
-            if os.path.exists(bundled_model_dir):
-                MODEL_PATH = os.path.join(app_dir, 'models')
-                logger.info(f"使用打包目录中的模型: {MODEL_PATH}")
+        # 要检查的可能模型路径
+        possible_model_paths = []
         
-        model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
-        logger.info(f"检查模型目录: {model_dir}")
+        # 1. 如果当前是打包后的环境，则尝试在打包目录中查找模型
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+            
+            # 情况1: 标准路径 - app_dir/models/MODEL_NAME_formatted
+            standard_model_dir = os.path.join(app_dir, 'models', MODEL_NAME.replace('/', '_'))
+            possible_model_paths.append((standard_model_dir, os.path.join(app_dir, 'models')))
+            
+            # 情况2: 打包路径 - app_dir/_internal/models (没有MODEL_NAME_formatted子目录)
+            internal_models_dir = os.path.join(app_dir, '_internal', 'models')
+            possible_model_paths.append((internal_models_dir, internal_models_dir))
+            
+            # 情况3: 打包路径 - app_dir/_internal/models/MODEL_NAME_formatted
+            internal_model_dir = os.path.join(internal_models_dir, MODEL_NAME.replace('/', '_'))
+            possible_model_paths.append((internal_model_dir, internal_models_dir))
+        
+        # 2. 开发环境 - 当前工作目录下的models
+        dev_model_dir = os.path.join(os.getcwd(), 'models', MODEL_NAME.replace('/', '_'))
+        possible_model_paths.append((dev_model_dir, os.path.join(os.getcwd(), 'models')))
         
         # 根据 alibaba-pai/pai-bert-base-zh-llm-risk-detection 模型调整所需文件列表
         required_files = ["pytorch_model.bin", "config.json", "tokenizer_config.json", "vocab.txt"]
-        for file in required_files:
-            file_path = os.path.join(model_dir, file)
-            if not os.path.exists(file_path):
-                logger.warning(f"缺少必要的模型文件: {file}")
-                return False
         
-        logger.info("模型已完整配置")
-        return True
+        # 检查每个可能的路径
+        for check_dir, base_dir in possible_model_paths:
+            logger.info(f"检查模型目录: {check_dir}")
+            
+            # 检查目录是否存在
+            if not os.path.exists(check_dir):
+                logger.info(f"目录不存在: {check_dir}")
+                continue
+                
+            # 检查所需文件是否都存在
+            files_exist = True
+            for file in required_files:
+                file_path = os.path.join(check_dir, file)
+                if not os.path.exists(file_path):
+                    # 如果文件不在预期目录，检查是否直接在 models 目录下
+                    if base_dir != check_dir:
+                        file_path_alt = os.path.join(base_dir, file)
+                        if os.path.exists(file_path_alt):
+                            continue
+                    
+                    logger.warning(f"缺少必要的模型文件: {file} 在 {check_dir}")
+                    files_exist = False
+                    break
+            
+            if files_exist:
+                logger.info(f"找到完整模型在: {check_dir}")
+                MODEL_PATH = base_dir
+                _model_dir = check_dir
+                logger.info(f"设置MODEL_PATH为: {MODEL_PATH}")
+                logger.info(f"设置_model_dir为: {_model_dir}")
+                return True
+        
+        logger.warning("未找到完整配置的模型")
+        return False
+        
     except Exception as e:
         logger.error(f"检查模型配置时出错: {str(e)}")
         return False
@@ -155,22 +192,22 @@ def load_classifier(device='cpu'):
     """
     加载并缓存分类器，以避免重复加载模型。
     """
-    global _cached_classifier
+    global _cached_classifier, _model_dir
     
     try:
-        # 确保模型已配置，这会正确设置MODEL_PATH
+        # 确保模型已配置，这会正确设置MODEL_PATH和_model_dir
         if not check_model_configured():
             error_msg = "模型未配置完成，请先下载模型。"
             logger.error(error_msg)
             raise Exception(error_msg)
         
         if _cached_classifier is None:
-            model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
-            logger.info(f"开始加载模型: {model_dir}, 设备: {device}")
+            # 使用_model_dir作为模型路径
+            logger.info(f"开始加载模型: {_model_dir}, 设备: {device}")
             
             try:
-                tokenizer = AutoTokenizer.from_pretrained(model_dir)
-                model = AutoModelForSequenceClassification.from_pretrained(model_dir)
+                tokenizer = AutoTokenizer.from_pretrained(_model_dir)
+                model = AutoModelForSequenceClassification.from_pretrained(_model_dir)
                 _cached_classifier = pipeline(
                     'text-classification',
                     model=model,
