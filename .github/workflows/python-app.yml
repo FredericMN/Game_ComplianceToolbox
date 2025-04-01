@@ -77,6 +77,52 @@ jobs:
       run: |
         Get-Content requirements.txt | Out-File -FilePath requirements.txt -Encoding utf8
 
+    # 下载模型到缓存目录
+    - name: Download model
+      shell: pwsh
+      run: |
+        # 创建models目录
+        $modelsDir = "models"
+        New-Item -Path $modelsDir -ItemType Directory -Force
+
+        # 定义模型仓库名并创建对应目录
+        $modelRepoName = "alibaba-pai_pai-bert-base-zh-llm-risk-detection"
+        $modelDir = Join-Path -Path $modelsDir -ChildPath $modelRepoName
+        New-Item -Path $modelDir -ItemType Directory -Force
+
+        # 创建临时脚本来下载模型
+        $scriptContent = @"
+        import os
+        from huggingface_hub import hf_hub_download, HfApi
+        
+        MODEL_NAME = 'alibaba-pai/pai-bert-base-zh-llm-risk-detection'
+        MODEL_PATH = 'models'
+        
+        # 下载模型文件
+        api = HfApi()
+        model_dir = os.path.join(MODEL_PATH, MODEL_NAME.replace('/', '_'))
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
+        
+        # 获取仓库中的所有文件
+        repo_files = api.list_repo_files(repo_id=MODEL_NAME)
+        revision = "main"
+        
+        for file_name in repo_files:
+            print(f"Downloading {file_name}...")
+            local_file_path = os.path.join(model_dir, file_name)
+            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            hf_hub_download(repo_id=MODEL_NAME, filename=file_name, local_dir=model_dir, local_dir_use_symlinks=False)
+            print(f"Downloaded {file_name}")
+        
+        print("All model files downloaded successfully!")
+"@
+        $scriptContent | Out-File -FilePath "download_model.py" -Encoding utf8
+        
+        # 安装必要的包并运行脚本
+        pip install huggingface_hub
+        python download_model.py
+
     # 设置标准构建环境
     - name: Set up Standard Build Environment
       shell: pwsh
@@ -94,6 +140,7 @@ jobs:
         .\standard_env\Scripts\Activate.ps1
         pyinstaller --name "ComplianceToolbox_standard" --windowed --icon=resources/logo.ico `
           --add-data "resources;resources" --add-data "styles;styles" `
+          --add-data "models;models" `
           --add-data "CHANGELOG.md;." `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
@@ -133,6 +180,7 @@ jobs:
         .\cuda_env\Scripts\Activate.ps1
         pyinstaller --name "ComplianceToolbox_cuda" --windowed --icon=resources/logo.ico `
           --add-data "resources;resources" --add-data "styles;styles" `
+          --add-data "models;models" `
           --add-data "CHANGELOG.md;." `
           --hidden-import=psutil --hidden-import=selenium.webdriver.edge.service `
           --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui `
