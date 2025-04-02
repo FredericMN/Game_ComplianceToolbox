@@ -46,6 +46,16 @@ class CopyrightQuery:
         # 初始化回调函数
         self.progress_callback = None
         self.login_confirm_callback = None
+        # 记录连续失败次数
+        self.continuous_failures = 0
+        # 最大允许的连续失败次数，超过则认为遇到了反爬机制
+        self.max_failures = 3
+        # 当前处理的游戏索引，用于恢复进度
+        self.current_game_index = 0
+        # 暂停标志
+        self.paused = False
+        # 暂停原因
+        self.paused_reason = ""
         
     def set_progress_callback(self, callback):
         """设置进度回调函数"""
@@ -218,7 +228,7 @@ class CopyrightQuery:
         try:
             # 构建XPath，查找包含特定文本的label元素
             xpath = f"//label[contains(@class, 'fcheck')][contains(., '{label_text}')]"
-            print(f"尝试查找并点击复选框: {label_text} (XPath: {xpath})")
+            self.update_progress(f"尝试查找并点击复选框: {label_text} (XPath: {xpath})")
             
             # 等待元素可见且可点击
             wait = WebDriverWait(driver, 15) # 增加等待时间
@@ -228,23 +238,27 @@ class CopyrightQuery:
             try:
                 # 方式1: 直接点击
                 checkbox_label.click()
-                print(f"成功点击复选框: {label_text} (直接点击)")
+                self.update_progress(f"成功点击复选框: {label_text} (直接点击)")
+                self.continuous_failures = 0  # 成功后重置失败计数
                 return True
             except ElementNotInteractableException:
-                print("直接点击失败，尝试JavaScript点击")
+                self.update_progress("直接点击失败，尝试JavaScript点击")
                 # 方式2: 使用JavaScript点击
                 driver.execute_script("arguments[0].click();", checkbox_label)
-                print(f"成功点击复选框: {label_text} (JavaScript点击)")
+                self.update_progress(f"成功点击复选框: {label_text} (JavaScript点击)")
+                self.continuous_failures = 0  # 成功后重置失败计数
                 return True
                 
         except TimeoutException:
-            print(f"查找或点击复选框超时: {label_text}")
+            self.update_progress(f"查找或点击复选框超时: {label_text}")
             self.save_debug_info(driver, f"checkbox_timeout_{label_text.replace(' ', '_')}")
-            return False
+            # 检查是否遇到了反爬机制
+            return self.check_anti_crawl(f"查找或点击复选框超时: {label_text}")
         except Exception as e:
-            print(f"点击复选框时发生未知错误 ({label_text}): {str(e)}")
+            self.update_progress(f"点击复选框时发生未知错误 ({label_text}): {str(e)}")
             self.save_debug_info(driver, f"checkbox_error_{label_text.replace(' ', '_')}")
-            return False
+            # 检查是否遇到了反爬机制
+            return self.check_anti_crawl(f"点击复选框异常: {str(e)}")
 
     def get_search_result_count(self, driver):
         """获取搜索结果数量"""
@@ -252,40 +266,52 @@ class CopyrightQuery:
             # 等待包含结果数量的span元素可见
             wait = WebDriverWait(driver, 15) # 增加等待时间
             span_xpath = "//h4[contains(., '为您找到')]/span[@class='text-danger']"
-            print(f"等待搜索结果数量元素可见 (XPath: {span_xpath})")
+            self.update_progress(f"等待搜索结果数量元素可见 (XPath: {span_xpath})")
             span_element = wait.until(EC.visibility_of_element_located((By.XPATH, span_xpath)))
             
             # 获取文本并提取数字
             result_text = span_element.text.strip()
-            print(f"从span.text-danger获取到结果: '{result_text}'")
+            self.update_progress(f"从span.text-danger获取到结果: '{result_text}'")
             if result_text: 
+                self.continuous_failures = 0  # 成功后重置失败计数
                 return self.extract_number_from_text(result_text)
             else:
                 # 如果文本为空，尝试获取父级h4的文本
-                print("span文本为空，尝试获取父级h4文本")
+                self.update_progress("span文本为空，尝试获取父级h4文本")
                 try:
                     h4_element = driver.find_element(By.XPATH, "//h4[contains(., '为您找到')]")
                     h4_text = h4_element.text.strip()
-                    print(f"从h4获取到文本: '{h4_text}'")
+                    self.update_progress(f"从h4获取到文本: '{h4_text}'")
+                    self.continuous_failures = 0  # 成功后重置失败计数
                     return self.extract_number_from_text(h4_text)
                 except Exception as e_h4:
-                    print(f"获取h4文本失败: {str(e_h4)}")
+                    self.update_progress(f"获取h4文本失败: {str(e_h4)}")
+                    # 检查是否遇到了反爬机制
+                    if not self.check_anti_crawl(f"获取h4文本失败: {str(e_h4)}"):
+                        return 0
                     return 0 # 返回0表示未找到或提取失败
         except TimeoutException:
-            print("等待搜索结果数量元素超时")
+            self.update_progress("等待搜索结果数量元素超时")
             # 检查页面是否提示"未找到相关结果"
             try:
                 no_result_xpath = "//div[contains(@class, 'nodata')] | //div[contains(text(), '未找到相关结果')] | //p[contains(text(), '未找到相关结果')]"
                 driver.find_element(By.XPATH, no_result_xpath)
-                print("页面提示未找到相关结果，返回 0")
+                self.update_progress("页面提示未找到相关结果，返回 0")
+                self.continuous_failures = 0  # 成功识别到"无结果"也是正常情况，重置失败计数
                 return 0
             except NoSuchElementException:
-                print("未找到'无结果'提示，可能页面结构有变或加载失败")
+                self.update_progress("未找到'无结果'提示，可能页面结构有变或加载失败")
                 self.save_debug_info(driver, "result_count_timeout")
+                # 检查是否遇到了反爬机制
+                if not self.check_anti_crawl("未找到搜索结果元素，也未找到'无结果'提示"):
+                    return 0
                 return 0 # 超时且无明确提示，返回0
         except Exception as e:
-            print(f"获取搜索结果数量时发生未知错误: {str(e)}")
+            self.update_progress(f"获取搜索结果数量时发生未知错误: {str(e)}")
             self.save_debug_info(driver, "result_count_error")
+            # 检查是否遇到了反爬机制
+            if not self.check_anti_crawl(f"获取搜索结果异常: {str(e)}"):
+                return 0
             return 0
 
     def extract_and_match_results(self, driver, game_name, operator):
@@ -496,7 +522,7 @@ class CopyrightQuery:
         except Exception as e:
             print(f"保存截图失败: {str(e)}")
 
-    def query_copyright(self, excel_path, progress_callback=None):
+    def query_copyright(self, excel_path, progress_callback=None, start_from_index=0):
         """查询著作权人信息并填充Excel"""
         # 如果传入了回调，临时替换全局回调
         old_callback = self.progress_callback
@@ -611,9 +637,22 @@ class CopyrightQuery:
                     else:
                         self.update_progress("输入无效，请输入数字1")
             
+            # 获取游戏列表，转换为列表以便按索引访问
+            game_list = list(game_operator_dict.items())
+            total_games = len(game_list)
+            
+            # 从指定索引开始查询
+            if start_from_index > 0:
+                self.update_progress(f"从第 {start_from_index+1} 个游戏继续查询")
+            
             # 查询每个游戏的著作权信息
-            total_games = len(game_operator_dict)
-            for i, (game_name, operator) in enumerate(game_operator_dict.items()):
+            for i in range(start_from_index, total_games):
+                # 记录当前处理索引，用于可能的恢复
+                self.current_game_index = i
+                
+                # 获取当前游戏信息
+                game_name, operator = game_list[i]
+                
                 try:
                     self.update_progress(f"\n[{i+1}/{total_games}] 查询游戏: {game_name}", 
                                          35 + int(60 * (i / total_games)))
@@ -642,8 +681,44 @@ class CopyrightQuery:
                     # 在每次搜索后应用筛选条件
                     self.update_progress("应用筛选条件...")
                     clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
+                    
+                    # 如果遇到反爬机制并且暂停了，需要等待用户登录后继续
+                    if self.paused:
+                        # 保存当前进度
+                        df_result.to_excel(new_excel_path, index=False)
+                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
+                        
+                        # 重置当前页面并重新尝试
+                        driver.get(search_url)
+                        if not self.wait_for_page_load(driver, timeout=15):
+                            continue
+                            
+                        # 重新尝试点击筛选条件
+                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
+                        if not clicked_filter1:
+                            continue
+                    
                     self.random_delay(0.5, 1) # 减少延迟
                     clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
+                    
+                    # 同样检查第二个筛选条件是否触发了反爬机制
+                    if self.paused:
+                        # 保存当前进度
+                        df_result.to_excel(new_excel_path, index=False)
+                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
+                        
+                        # 重置当前页面并重新尝试
+                        driver.get(search_url)
+                        if not self.wait_for_page_load(driver, timeout=15):
+                            continue
+                            
+                        # 重新尝试点击两个筛选条件
+                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
+                        self.random_delay(0.5, 1)
+                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
+                        if not clicked_filter1 or not clicked_filter2:
+                            continue
+                    
                     self.random_delay(1, 2) # 点击后等待页面刷新
 
                     if not clicked_filter1 or not clicked_filter2:
@@ -653,6 +728,28 @@ class CopyrightQuery:
 
                     # 获取搜索结果数量 (应用筛选后)
                     result_count = self.get_search_result_count(driver)
+                    
+                    # 检查是否因为反爬机制暂停了
+                    if self.paused:
+                        # 保存当前进度
+                        df_result.to_excel(new_excel_path, index=False)
+                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
+                        
+                        # 重置当前页面并重新尝试
+                        driver.get(search_url)
+                        if not self.wait_for_page_load(driver, timeout=15):
+                            continue
+                            
+                        # 重新尝试整个过程
+                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
+                        self.random_delay(0.5, 1)
+                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
+                        self.random_delay(1, 2)
+                        result_count = self.get_search_result_count(driver)
+                        
+                        if self.paused:  # 如果再次暂停，跳过当前游戏
+                            continue
+                    
                     self.update_progress(f"筛选后搜索结果数量: {result_count}")
                     
                     matched_copyright_owner = ""
@@ -671,6 +768,15 @@ class CopyrightQuery:
                             current_operator = game_operator_dict.get(game_name, "") 
                             matched_copyright_owner, is_game_name_match, is_operator_match, recommend_manual_check = \
                                 self.extract_and_match_results(driver, game_name, current_operator)
+                            
+                            # 检查是否因为反爬机制暂停了
+                            if self.paused:
+                                # 保存当前进度
+                                df_result.to_excel(new_excel_path, index=False)
+                                self.update_progress(f"已保存当前进度到: {new_excel_path}")
+                                
+                                # 重置当前页面并重新尝试
+                                continue
                             
                             df_result.loc[row_idx, "匹配著作权人"] = matched_copyright_owner
                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = is_game_name_match
@@ -697,7 +803,7 @@ class CopyrightQuery:
                         self.update_progress(f"警告：未找到游戏 '{game_name}' 在原始Excel中的行索引")
 
                     # 保存中间结果
-                    if (i + 1) % 5 == 0 or i == len(game_operator_dict) - 1:
+                    if (i + 1) % 5 == 0 or i == total_games - 1:
                         try:
                            df_result.to_excel(new_excel_path, index=False)
                            self.update_progress(f"已保存进度到: {new_excel_path}")
@@ -750,10 +856,46 @@ class CopyrightQuery:
         
         return new_excel_path
     
-    def process_excel(self, excel_path):
+    def process_excel(self, excel_path, start_from_index=0):
         """处理Excel文件并查询著作权人信息"""
-        # 直接处理整个Excel文件
-        return self.query_copyright(excel_path)
+        # 直接处理整个Excel文件，可以指定开始的索引以恢复进度
+        return self.query_copyright(excel_path, start_from_index=start_from_index)
+
+    def check_anti_crawl(self, exception_msg=None):
+        """检查是否遇到了反爬机制"""
+        self.continuous_failures += 1
+        if self.continuous_failures >= self.max_failures:
+            self.continuous_failures = 0  # 重置失败计数
+            self.paused = True  # 标记为暂停状态
+            self.paused_reason = exception_msg if exception_msg else "连续失败次数超过阈值"
+            
+            self.update_progress(f"检测到可能遇到网站反爬机制，需要重新登录或等待一段时间解除限制...")
+            
+            # 调用登录确认回调
+            if self.login_confirm_callback:
+                login_confirmed = self.login_confirm_callback()
+                if login_confirmed:
+                    self.update_progress("用户已确认重新登录，继续查询...")
+                    self.paused = False  # 解除暂停状态
+                    return True  # 继续处理
+                else:
+                    self.update_progress("用户取消了登录，终止查询", 0)
+                    return False  # 终止处理
+            else:
+                # 如果没有回调，使用旧的控制台交互方式
+                self.update_progress("1. 请在浏览器中重新登录")
+                self.update_progress("2. 登录完成后，请在此终端输入数字1并按回车键继续")
+                
+                # 等待用户确认已登录
+                while True:
+                    user_input = input("请输入数字1表示已完成登录: ")
+                    if user_input.strip() == "1":
+                        self.update_progress("已确认登录完成，继续处理...")
+                        self.paused = False  # 解除暂停状态
+                        return True  # 继续处理
+                    else:
+                        self.update_progress("输入无效，请输入数字1")
+        return True  # 连续失败次数未超过阈值，继续处理
 
 
 # 主程序入口
