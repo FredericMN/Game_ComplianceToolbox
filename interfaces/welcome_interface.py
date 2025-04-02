@@ -39,22 +39,36 @@ class WelcomeInterface(BaseInterface):
         return os.path.join(CURRENT_DIR, 'env_check_result.json')
 
     def check_env_status(self):
-        """检查环境状态，增加缓存时间限制"""
+        """检查环境状态，增加缓存时间限制和系统资源检测"""
         if os.path.exists(self.env_result_file):
             try:
                 with open(self.env_result_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     date_str = data.get('date')
                     result = data.get('result')
+                    system_info = data.get('system_info', {})  # 获取系统资源信息
                     check_time = datetime.strptime(date_str, "%Y-%m-%d")
                     
-                    # 如果检测结果超过7天，重新检测
-                    if (datetime.now() - check_time).days > 7:
+                    # 如果检测结果超过3天，重新检测 (调整为3天以提高检测频率)
+                    if (datetime.now() - check_time).days > 3:
+                        self.output_text_edit.append(f"[{datetime.now().strftime('%H:%M:%S')}] 上次检测已超过3天，将重新检测...")
                         self.run_environment_check()
                         return False
                         
                     if date_str and (result is not None):
                         timestamp = datetime.now().strftime("%H:%M:%S")
+                        
+                        # 显示系统资源状态信息
+                        if system_info:
+                            sys_message = f"[{timestamp}] 系统资源情况: "
+                            if system_info.get('warnings'):
+                                sys_message += "⚠️ 注意系统资源使用情况 "
+                                for warning in system_info.get('warnings', []):
+                                    self.output_text_edit.append(f"[{timestamp}] ⚠️ {warning}")
+                            else:
+                                sys_message += "✓ 系统资源充足"
+                            self.output_text_edit.append(sys_message)
+                        
                         if result:
                             message = f"[{timestamp}] {date_str} 检测环境：通过。可直接使用。如遇问题可再次检测！"
                             # 如果检测通过，启用导航栏，但不触发弹窗
@@ -456,38 +470,166 @@ class WelcomeInterface(BaseInterface):
         pass
 
     def on_check_finished(self, has_errors):
-        """检测完成的处理"""
+        """检测完成的处理，增强异常状态反馈与恢复"""
         self.is_checking_env = False
         self.check_env_button.setEnabled(True)
         self.overlay.hide()
-
-        # 启用所有功能卡片
-        if hasattr(self, 'function_cards'):
-            for card in self.function_cards:
-                card.setProperty("disabled", False)
-                card.setCursor(Qt.PointingHandCursor)  # 恢复指针手型
-                card.setStyle(card.style())  # 刷新样式
 
         # 获取当前日期并记录结果
         current_date = datetime.now().strftime("%Y-%m-%d")
         self.record_env_check_result(current_date, not has_errors)
 
-        # 发送信号
-        self.environment_check_finished.emit(has_errors, True)
-
+        # 根据检测结果提供不同的用户界面反馈
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        if has_errors:
+            # 检测失败的情况
+            error_message = f"[{timestamp}] 环境检测未通过，部分功能可能无法正常使用。"
+            self.output_text_edit.append(error_message)
+            
+            # 添加一个更明确的错误提示和解决方案
+            solution_message = (
+                "[解决方案] 请尝试以下步骤：\n"
+                "1. 确保您的Edge浏览器是最新版本\n"
+                "2. 检查网络连接\n"
+                "3. 尝试重新启动应用程序\n"
+                "4. 如果问题持续存在，请点击下方的'检测运行环境'按钮重试"
+            )
+            self.output_text_edit.append(solution_message)
+            
+            # 更新按钮文本和样式，强调可以重试
+            self.check_env_button.setText("重新检测环境")
+            self.check_env_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 20px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    min-width: 160px;
+                }
+                QPushButton:hover {
+                    background-color: #c0392b;
+                }
+                QPushButton:pressed {
+                    background-color: #a93226;
+                }
+            """)
+            
+            # 有条件地启用功能卡片
+            # 对于一些不依赖于完整环境的功能，可以选择性启用
+            if hasattr(self, 'function_cards'):
+                for i, card in enumerate(self.function_cards):
+                    # 获取卡片的名称（通过属性或其他方式）
+                    card_name = None
+                    for child in card.children():
+                        if isinstance(child, QLabel) and child.text() not in ["🔍", "🕷️", "📋", "📊", "🤖", "✨", "⚙️"]:
+                            card_name = child.text()
+                            break
+                    
+                    # 根据功能依赖决定是否启用
+                    # 例如"设定"和"词表对照"可能不依赖WebDriver
+                    if card_name in ["设定", "词表对照"]:
+                        card.setProperty("disabled", False)
+                        card.setCursor(Qt.PointingHandCursor)
+                    else:
+                        card.setProperty("disabled", True)
+                        card.setCursor(Qt.ArrowCursor)
+                    card.setStyle(card.style())  # 刷新样式
+            
+            # 发送检测失败信号
+            self.environment_check_finished.emit(has_errors, True)
+        else:
+            # 检测成功的情况
+            success_message = f"[{timestamp}] 环境检测通过，可以使用所有功能。"
+            self.output_text_edit.append(success_message)
+            
+            # 恢复按钮原始样式
+            self.check_env_button.setText("检测运行环境")
+            self.check_env_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #3498db;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 20px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    min-width: 160px;
+                }
+                QPushButton:hover {
+                    background-color: #2980b9;
+                }
+                QPushButton:pressed {
+                    background-color: #2573a7;
+                }
+                QPushButton:disabled {
+                    background-color: #bdc3c7;
+                }
+            """)
+            
+            # 启用所有功能卡片
+            if hasattr(self, 'function_cards'):
+                for card in self.function_cards:
+                    card.setProperty("disabled", False)
+                    card.setCursor(Qt.PointingHandCursor)  # 恢复指针手型
+                    card.setStyle(card.style())  # 刷新样式
+            
+            # 发送检测成功信号
+            self.environment_check_finished.emit(has_errors, True)
+            
         # 清理资源
         self.cleanup_check()
 
     def record_env_check_result(self, date_str, result):
+        """记录环境检测结果，增加系统资源信息"""
+        # 收集系统资源信息
+        system_info = self.collect_system_info()
+        
         data = {
             "date": date_str,
-            "result": result
+            "result": result,
+            "system_info": system_info
         }
         try:
             with open(self.env_result_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
             self.output_text_edit.append(f"记录环境检测结果失败：{str(e)}")
+
+    def collect_system_info(self):
+        """收集系统资源信息"""
+        system_info = {
+            "warnings": []
+        }
+        try:
+            # 导入psutil
+            import psutil
+            
+            # 收集内存信息
+            mem = psutil.virtual_memory()
+            system_info["memory_percent"] = mem.percent
+            if mem.percent > 90:
+                system_info["warnings"].append(f"系统内存使用率高: {mem.percent}%")
+            
+            # 收集CPU信息
+            cpu_usage = psutil.cpu_percent(interval=0.1)
+            system_info["cpu_percent"] = cpu_usage
+            if cpu_usage > 85:
+                system_info["warnings"].append(f"CPU使用率高: {cpu_usage}%")
+            
+            # 收集磁盘信息
+            disk = psutil.disk_usage('/')
+            system_info["disk_percent"] = disk.percent
+            if disk.percent > 95:
+                system_info["warnings"].append(f"磁盘空间不足: 已使用 {disk.percent}%")
+                
+        except Exception as e:
+            system_info["error"] = str(e)
+            
+        return system_info
 
     def on_card_clicked(self, name):
         """处理卡片点击事件"""

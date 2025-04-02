@@ -639,7 +639,10 @@ class EnvironmentChecker(QObject):
             return False, None
 
     def _try_edge_with_alternative_service(self, driver_path=None):
-        """策略4: 使用替代服务启动方式"""
+        """策略4: 使用替代服务启动方式，带超时机制和健壮的错误处理"""
+        temp_dir = None
+        process = None
+        
         try:
             # 生成随机端口和唯一临时目录
             port = random.randint(10000, 32000)  # 使用更大范围端口
@@ -674,16 +677,66 @@ class EnvironmentChecker(QObject):
             
             # 启动后台进程，添加参数使其避免使用已存在的用户数据目录
             try:
-                # 在命令行中添加禁用用户数据目录相关参数
+                # 设置超时机制启动进程
+                cmd = [driver_path, f"--port={port}", "--disable-dev-shm-usage", "--no-sandbox", 
+                    "--disable-extensions", "--disable-application-cache"]
+                    
+                # 移除所有可能的WebDriver日志输出，减少磁盘IO
+                log_path = os.path.join(temp_dir, "driver.log")
+                
+                # 使用subprocess.Popen启动进程
+                startupinfo = None
+                if sys.platform == 'win32':
+                    # 在Windows中隐藏控制台窗口
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = 0  # SW_HIDE
+                
                 process = subprocess.Popen(
-                    [driver_path, f"--port={port}", "--disable-dev-shm-usage", "--no-sandbox", 
-                    "--disable-extensions", "--disable-application-cache"],
+                    cmd,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.PIPE,
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
                 
-                # 给服务一些启动时间
-                time.sleep(1.0)  # 增加等待时间
+                # 使用超时检查进程是否正常启动
+                start_time = time.time()
+                max_wait = 5.0  # 最多等待5秒
+                
+                # 循环检查进程是否还在运行，以及是否已经超时
+                while process.poll() is None and (time.time() - start_time) < max_wait:
+                    # 尝试连接WebDriver服务，看是否已经就绪
+                    try:
+                        import socket
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(0.5)
+                        s.connect(('localhost', port))
+                        s.close()
+                        # 连接成功，服务已就绪
+                        break
+                    except Exception:
+                        # 服务尚未就绪，等待一小段时间再试
+                        time.sleep(0.2)
+                
+                # 检查进程是否已终止
+                if process.poll() is not None:
+                    # 进程已终止，获取错误输出
+                    stderr = process.stderr.read().decode('utf-8', errors='ignore')
+                    self.output_signal.emit(f"驱动进程异常终止: {stderr}")
+                    return False, None
+                
+                # 检查是否超时
+                if (time.time() - start_time) >= max_wait:
+                    self.output_signal.emit("启动驱动服务超时")
+                    # 终止进程
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False, None
+                
             except Exception as e:
                 self.output_signal.emit(f"启动驱动服务失败: {str(e)}")
                 return False, None
@@ -700,30 +753,129 @@ class EnvironmentChecker(QObject):
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
                 
-                # 直接连接到已运行的msedgedriver
-                driver = webdriver.Remote(
-                    command_executor=f'http://localhost:{port}',
-                    options=options
-                )
+                # 设置WebDriver连接超时
+                from selenium.webdriver.remote.remote_connection import RemoteConnection
+                RemoteConnection.set_timeout(10.0)  # 设置10秒超时
                 
-                # 保存进程引用以便稍后清理
-                driver._msedgedriver_process = process
-                
-                return True, driver
+                # 使用异步方式尝试连接驱动服务
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        webdriver.Remote,
+                        command_executor=f'http://localhost:{port}',
+                        options=options
+                    )
+                    
+                    try:
+                        driver = future.result(timeout=10)  # 10秒超时
+                        # 保存进程引用以便稍后清理
+                        driver._msedgedriver_process = process
+                        return True, driver
+                    except concurrent.futures.TimeoutError:
+                        self.output_signal.emit("WebDriver连接超时")
+                        return False, None
+                    except Exception as e:
+                        self.output_signal.emit(f"创建WebDriver时异常: {e}")
+                        return False, None
             except Exception as e:
                 self.output_signal.emit(f"连接到驱动服务失败: {str(e)}")
-                # 确保进程被终止
-                if 'process' in locals():
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
-                # 确保在失败时清理
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception:
-                    pass
                 return False, None
         except Exception as e:
             self.output_signal.emit(f"策略4整体失败: {str(e)}")
             return False, None
+        finally:
+            # 确保在失败时清理资源
+            if 'driver' not in locals() or not locals().get('driver'):
+                # 如果driver创建失败，清理进程
+                if process and process.poll() is None:
+                    try:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                    except Exception:
+                        pass
+                
+                # 清理临时目录
+                if temp_dir and os.path.exists(temp_dir) and temp_dir in self.current_temp_dirs:
+                    try:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        # 从当前目录列表中移除
+                        self.current_temp_dirs.remove(temp_dir)
+                    except Exception:
+                        pass
+
+    def cleanup_check(self):
+        """清理检测相关资源"""
+        if self.thread and self.thread.isRunning():
+            try:
+                # 先把对象引用保存下来
+                thread = self.thread
+                environment_checker = self.environment_checker
+                
+                # 先将属性设置为None，防止其他地方重复调用
+                self.thread = None
+                self.environment_checker = None
+                
+                # 停止线程前先确保资源释放
+                if environment_checker:
+                    try:
+                        # 主动调用资源清理
+                        environment_checker.cleanup_resources()
+                    except Exception as e:
+                        self.output_signal.emit(f"[警告] 清理环境检测资源时出错: {str(e)}")
+                
+                # 停止线程
+                thread.quit()
+                # 等待线程结束，如果超时就强制终止
+                if not thread.wait(3000):  # 等待最多3秒
+                    self.output_signal.emit("[警告] 环境检测线程超时，强制终止")
+                    # 强制终止线程
+                    thread.terminate()
+                    time.sleep(0.5)  # 给系统一点时间处理终止操作
+                
+                # 断开所有信号连接
+                try:
+                    thread.started.disconnect()
+                    if environment_checker:
+                        environment_checker.output_signal.disconnect()
+                        environment_checker.structured_result_signal.disconnect()
+                        environment_checker.finished.disconnect()
+                except (TypeError, RuntimeError):
+                    # 忽略已断开连接的异常
+                    pass
+                    
+                # 清理任何残留的msedgedriver进程
+                try:
+                    terminated_count = 0
+                    for proc in psutil.process_iter(['pid', 'name']):
+                        try:
+                            if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
+                                try:
+                                    proc.terminate()
+                                    gone, alive = psutil.wait_procs([proc], timeout=3)
+                                    if proc in alive:
+                                        proc.kill()
+                                    terminated_count += 1
+                                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                                    self.output_signal.emit(f"[警告] 终止进程时出错: {str(e)}")
+                        except Exception as e:
+                            pass
+                    
+                    if terminated_count > 0:
+                        self.output_signal.emit(f"[系统] 已清理 {terminated_count} 个残留msedgedriver进程")
+                        
+                    # 使用系统命令强制终止所有可能的残留进程
+                    if sys.platform == 'win32':
+                        subprocess.call('taskkill /f /im msedgedriver.exe', shell=True, 
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception as e:
+                    self.output_signal.emit(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
+            except Exception as e:
+                self.output_signal.emit(f"[错误] 清理资源时出错: {str(e)}")
+                # 尝试使用最低限度的清理保证不留下残留进程
+                try:
+                    if sys.platform == 'win32':
+                        subprocess.call('taskkill /f /im msedgedriver.exe', shell=True)
+                except:
+                    pass
