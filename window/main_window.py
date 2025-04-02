@@ -30,6 +30,7 @@ from interfaces.large_model_interface import LargeModelInterface
 from utils.version_checker import VersionChecker, VersionCheckWorker
 from interfaces.large_model_optimization_interface import LargeModelOptimizationInterface
 from PySide6.QtCore import QThread
+from interfaces.copyright_query_interface import CopyrightQueryInterface
 
 
 def resource_path(relative_path):
@@ -64,6 +65,7 @@ class MainWindow(FramelessWindow):
         self.settingsInterface = SettingsInterface(self)
         self.versionMatchingInterface = VersionMatchingInterface(self)
         self.largeModelOptimizationInterface = LargeModelOptimizationInterface(self)
+        self.copyrightQueryInterface = CopyrightQueryInterface(self)
 
         # 初始时禁用导航栏
         self.set_navigation_enabled(False)
@@ -117,6 +119,10 @@ class MainWindow(FramelessWindow):
 
         self.add_sub_interface(
             self.versionMatchingInterface, FIF.CERTIFICATE, "版号匹配"
+        )
+
+        self.add_sub_interface(
+            self.copyrightQueryInterface, FIF.BOOK_SHELF, "著作权人查询"
         )
 
         self.add_sub_interface(
@@ -241,6 +247,7 @@ class MainWindow(FramelessWindow):
             "文档风险词汇批量检测": self.detectionToolInterface,
             "新游爬虫": self.crawlerInterface,
             "版号匹配": self.versionMatchingInterface,
+            "著作权人查询": self.copyrightQueryInterface,
             "词表对照": self.vocabularyComparisonInterface,
             "大模型语义分析": self.largeModelInterface,
             "大模型文案正向优化": self.largeModelOptimizationInterface,

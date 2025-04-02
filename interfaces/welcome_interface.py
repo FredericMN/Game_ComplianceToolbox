@@ -149,6 +149,7 @@ class WelcomeInterface(BaseInterface):
             {"name": "文档风险词汇批量检测", "description": "检测并标记文档中的风险词汇。", "icon": "🔍"},
             {"name": "新游爬虫", "description": "爬取TapTap上的新游信息并匹配版号。", "icon": "🕷️"},
             {"name": "版号匹配", "description": "匹配游戏的版号信息。", "icon": "📋"},
+            {"name": "著作权人查询", "description": "查询游戏的著作权人信息。", "icon": "©️"},
             {"name": "词表对照", "description": "对照两个词表的差异。", "icon": "📊"},
             {"name": "大模型语义分析", "description": "通过大模型审核文本，标记高风险内容。", "icon": "🤖"},
             {"name": "大模型文案正向优化", "description": "通过大模型输出语句的正向优化。", "icon": "✨"},
