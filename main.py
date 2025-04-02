@@ -23,21 +23,22 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def cleanup_webdriver_temp_files():
-    """启动时清理可能遗留的WebDriver临时文件夹，增强版"""
+    """启动时清理可能遗留的WebDriver临时文件夹和驱动进程"""
     try:
-        print("正在清理WebDriver临时文件和相关进程...")
+        print("正在清理WebDriver临时文件和相关驱动进程...")
         # 清理临时目录中的所有WebDriver相关目录
         temp_dir = tempfile.gettempdir()
         patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
         removed_count = 0
         failed_count = 0
         
-        # 第一阶段：彻底终止所有相关进程
+        # 第一阶段：彻底终止所有相关的驱动进程
         terminated_processes = set()
         
-        # 1. 使用taskkill强制终止所有相关进程 (Windows特定)
+        # 1. 使用taskkill强制终止所有 msedgedriver 进程 (Windows特定)
+        #    注意：不再终止 msedge.exe
         if sys.platform == 'win32':
-            for process_name in ['msedgedriver.exe', 'msedge.exe', 'EdgeWebDriver.exe']:
+            for process_name in ['msedgedriver.exe', 'EdgeWebDriver.exe']: # 移除了 'msedge.exe'
                 try:
                     result = subprocess.run(
                         f'taskkill /f /im {process_name}', 
@@ -53,11 +54,13 @@ def cleanup_webdriver_temp_files():
                 except Exception as e:
                     pass
             
-        # 2. 使用psutil更精确地查找和终止相关进程
-        process_keywords = ['msedgedriver', 'msedge', 'edgewebdriver']
+        # 2. 使用psutil更精确地查找和终止相关的驱动进程
+        #    注意：不再查找 msedge 关键字
+        process_keywords = ['msedgedriver', 'edgewebdriver'] # 移除了 'msedge'
         for proc in psutil.process_iter(['pid', 'name']):
             try:
-                if proc.info.get('name') and any(keyword in proc.info.get('name').lower() for keyword in process_keywords):
+                # 确保 proc.info['name'] 存在且包含关键字
+                if proc.info.get('name') and any(keyword in proc.info['name'].lower() for keyword in process_keywords):
                     try:
                         proc_name = proc.info.get('name')
                         proc.terminate()  # 先尝试温和终止
@@ -77,7 +80,7 @@ def cleanup_webdriver_temp_files():
         
         # 等待一段时间确保进程完全释放文件锁
         if terminated_processes:
-            print(f"已终止以下进程: {', '.join(terminated_processes)}")
+            print(f"已终止以下驱动进程: {', '.join(terminated_processes)}")
             time.sleep(1.5)  # 增加等待时间，确保资源完全释放
         
         # 第二阶段：智能清理临时文件
@@ -158,7 +161,8 @@ def cleanup_webdriver_temp_files():
                 print(f"清理目录失败: {path}, 错误: {str(e)}")
                 failed_count += 1
         
-        # 最后检查：再次确认是否有残留的进程
+        # 最后检查：再次确认是否有残留的驱动进程
+        # 注意：不再检查 msedge.exe
         found_after_cleanup = []
         for proc in psutil.process_iter(['pid', 'name']):
             try:
@@ -168,7 +172,7 @@ def cleanup_webdriver_temp_files():
                 pass
         
         if found_after_cleanup:
-            print(f"警告: 清理后仍有以下进程: {', '.join(found_after_cleanup)}")
+            print(f"警告: 清理后仍有以下驱动进程: {', '.join(found_after_cleanup)}")
         
         # 输出清理结果
         if removed_count > 0 or failed_count > 0:
@@ -219,9 +223,10 @@ def ensure_final_cleanup():
         # 1. 先清理任务管理器中的资源
         task_manager.cleanup_all_resources()
         
-        # 2. 终止所有可能的残留进程
+        # 2. 终止所有可能的残留驱动进程
+        #    注意：不再终止 msedge.exe
         if sys.platform == 'win32':
-            for process_name in ['msedgedriver.exe', 'msedge.exe']:
+            for process_name in ['msedgedriver.exe', 'EdgeWebDriver.exe']: # 移除了 'msedge.exe'
                 try:
                     subprocess.run(
                         f'taskkill /f /im {process_name}', 
@@ -234,7 +239,8 @@ def ensure_final_cleanup():
                     pass
         
         # 3. 使用psutil确保干净退出
-        process_keywords = ['msedgedriver', 'msedge']
+        #    注意：不再查找 msedge
+        process_keywords = ['msedgedriver', 'edgewebdriver'] # 移除了 'msedge'
         for proc in psutil.process_iter(['pid', 'name']):
             try:
                 if (proc.info.get('name') and 

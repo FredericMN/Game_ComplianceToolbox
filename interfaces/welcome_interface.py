@@ -392,69 +392,42 @@ class WelcomeInterface(BaseInterface):
         self.thread.started.connect(self.environment_checker.run)
         self.environment_checker.output_signal.connect(self.append_output)
         self.environment_checker.structured_result_signal.connect(self.on_structured_results)
-        self.environment_checker.finished.connect(self.on_check_finished)
         self.environment_checker.finished.connect(self.cleanup_check)
+        self.environment_checker.finished.connect(self.on_check_finished, Qt.QueuedConnection)
 
         self.thread.start()
 
     def cleanup_check(self):
         """清理检测相关资源"""
-        if self.thread and self.thread.isRunning():
+        thread = self.thread
+        environment_checker = self.environment_checker
+        
+        # 先将属性设置为None，防止其他地方重复调用
+        self.thread = None
+        self.environment_checker = None
+        
+        if thread and thread.isRunning():
+            # 尝试请求线程退出
+            thread.quit()
+            # 等待线程结束，设置超时
+            if not thread.wait(3000):  # 等待最多3秒
+                self.append_output("[警告] 环境检测线程未能正常退出，尝试强制终止...")
+                thread.terminate() # 强制终止
+                thread.wait(500) # 短暂等待终止完成
+        
+        # 安全删除 QObject 对象
+        # 确保在删除前断开所有连接（虽然理论上quit/terminate后会自动处理）
+        if environment_checker:
             try:
-                # 先把对象引用保存下来
-                thread = self.thread
-                environment_checker = self.environment_checker
-                
-                # 先将属性设置为None，防止其他地方重复调用
-                self.thread = None
-                self.environment_checker = None
-                
-                # 停止线程
-                thread.quit()
-                # 等待线程结束，如果超时就强制终止
-                if not thread.wait(3000):  # 等待最多3秒
-                    self.output_text_edit.append("环境检测线程超时，强制终止")
-                
-                # 断开所有信号连接
-                try:
-                    thread.started.disconnect()
-                    if environment_checker:
-                        environment_checker.output_signal.disconnect()
-                        environment_checker.structured_result_signal.disconnect()
-                        environment_checker.finished.disconnect()
-                except (TypeError, RuntimeError):
-                    # 忽略已断开连接的异常
-                    pass
-                
-                # 安全删除对象
-                if environment_checker:
-                    environment_checker.deleteLater()
-                thread.deleteLater()
-                
-                # 清理任何残留的msedgedriver进程 - 直接使用psutil而不是导入main
-                try:
-                    import psutil
-                    terminated_count = 0
-                    for proc in psutil.process_iter(['pid', 'name']):
-                        try:
-                            if proc.info['name'] and proc.info['name'].lower() == 'msedgedriver.exe':
-                                try:
-                                    proc.terminate()
-                                    gone, alive = psutil.wait_procs([proc], timeout=3)
-                                    if proc in alive:
-                                        proc.kill()
-                                    terminated_count += 1
-                                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                                    self.output_text_edit.append(f"[警告] 终止进程时出错: {str(e)}")
-                        except Exception as e:
-                            pass
-                    
-                    if terminated_count > 0:
-                        self.output_text_edit.append(f"[系统] 已清理 {terminated_count} 个msedgedriver进程")
-                except Exception as e:
-                    self.output_text_edit.append(f"[错误] 清理msedgedriver进程时出错: {str(e)}")
+                # 主动调用 EnvironmentChecker 的资源清理是个好习惯，确保 driver 关闭
+                environment_checker.cleanup_resources()
             except Exception as e:
-                self.output_text_edit.append(f"[错误] 清理资源时出错: {str(e)}")
+                self.append_output(f"[警告] 在 cleanup_check 中调用 environment_checker.cleanup_resources 时出错: {e}")
+            finally:
+                environment_checker.deleteLater()
+        
+        if thread:
+            thread.deleteLater()
 
     def append_output(self, message):
         """优化输出信息显示"""
@@ -485,16 +458,15 @@ class WelcomeInterface(BaseInterface):
         
         if has_errors:
             # 检测失败的情况
-            error_message = f"[{timestamp}] 环境检测未通过，部分功能可能无法正常使用。"
+            error_message = f"[{timestamp}] 环境检测失败（浏览器或驱动配置错误），部分功能可能无法正常使用。"
             self.output_text_edit.append(error_message)
             
             # 添加一个更明确的错误提示和解决方案
             solution_message = (
                 "[解决方案] 请尝试以下步骤：\n"
-                "1. 确保您的Edge浏览器是最新版本\n"
-                "2. 检查网络连接\n"
-                "3. 尝试重新启动应用程序\n"
-                "4. 如果问题持续存在，请点击下方的'检测运行环境'按钮重试"
+                "1. 确保您的Edge浏览器已安装且为最新版本\n"
+                "2. 尝试重新启动应用程序\n"
+                "3. 如果问题持续存在，请再次点击下方的按钮重试检测"
             )
             self.output_text_edit.append(solution_message)
             
@@ -502,7 +474,7 @@ class WelcomeInterface(BaseInterface):
             self.check_env_button.setText("重新检测环境")
             self.check_env_button.setStyleSheet("""
                 QPushButton {
-                    background-color: #e74c3c;
+                    background-color: #e74c3c; /* 红色表示错误 */
                     color: white;
                     border: none;
                     border-radius: 8px;
@@ -522,26 +494,23 @@ class WelcomeInterface(BaseInterface):
             # 有条件地启用功能卡片
             # 对于一些不依赖于完整环境的功能，可以选择性启用
             if hasattr(self, 'function_cards'):
-                for i, card in enumerate(self.function_cards):
-                    # 获取卡片的名称（通过属性或其他方式）
-                    card_name = None
-                    for child in card.children():
-                        if isinstance(child, QLabel) and child.text() not in ["🔍", "🕷️", "📋", "📊", "🤖", "✨", "⚙️"]:
-                            card_name = child.text()
-                            break
+                for card in self.function_cards:
+                    # 通过 objectName 或者直接判断文本来识别卡片类型
+                    name_label = card.findChild(QLabel) # 查找第一个 QLabel 作为名字（需要调整）
+                    card_name = name_label.text() if name_label else "未知卡片" # 获取名字
                     
-                    # 根据功能依赖决定是否启用
-                    # 例如"设定"和"词表对照"可能不依赖WebDriver
-                    if card_name in ["设定", "词表对照"]:
+                    # 根据功能依赖决定是否启用 (示例)
+                    if card_name in ["设定", "词表对照"]: # 这些功能可能不依赖 WebDriver
                         card.setProperty("disabled", False)
                         card.setCursor(Qt.PointingHandCursor)
+                        card.setStyleSheet(card.styleSheet()) # 强制刷新样式
                     else:
                         card.setProperty("disabled", True)
                         card.setCursor(Qt.ArrowCursor)
-                    card.setStyle(card.style())  # 刷新样式
+                        card.setStyleSheet(card.styleSheet()) # 强制刷新样式
             
-            # 发送检测失败信号
-            self.environment_check_finished.emit(has_errors, True)
+            # 发送检测失败信号，标记为新检测
+            self.environment_check_finished.emit(True, True)
         else:
             # 检测成功的情况
             success_message = f"[{timestamp}] 环境检测通过，可以使用所有功能。"
@@ -551,7 +520,7 @@ class WelcomeInterface(BaseInterface):
             self.check_env_button.setText("检测运行环境")
             self.check_env_button.setStyleSheet("""
                 QPushButton {
-                    background-color: #3498db;
+                    background-color: #2ecc71; /* 绿色表示成功 */
                     color: white;
                     border: none;
                     border-radius: 8px;
@@ -561,10 +530,10 @@ class WelcomeInterface(BaseInterface):
                     min-width: 160px;
                 }
                 QPushButton:hover {
-                    background-color: #2980b9;
+                    background-color: #27ae60;
                 }
                 QPushButton:pressed {
-                    background-color: #2573a7;
+                    background-color: #229954;
                 }
                 QPushButton:disabled {
                     background-color: #bdc3c7;
@@ -576,13 +545,10 @@ class WelcomeInterface(BaseInterface):
                 for card in self.function_cards:
                     card.setProperty("disabled", False)
                     card.setCursor(Qt.PointingHandCursor)  # 恢复指针手型
-                    card.setStyle(card.style())  # 刷新样式
+                    card.setStyleSheet(card.styleSheet()) # 强制刷新样式
             
-            # 发送检测成功信号
-            self.environment_check_finished.emit(has_errors, True)
-            
-        # 清理资源
-        self.cleanup_check()
+            # 发送检测成功信号，标记为新检测
+            self.environment_check_finished.emit(False, True)
 
     def record_env_check_result(self, date_str, result):
         """记录环境检测结果，增加系统资源信息"""
@@ -634,5 +600,25 @@ class WelcomeInterface(BaseInterface):
 
     def on_card_clicked(self, name):
         """处理卡片点击事件"""
-        if not self.is_checking_env:  # 只有在非检测状态下才处理点击事件
+        # 检查卡片是否被禁用
+        sender_widget = self.sender() # 获取信号发送者（应该是卡片QWidget）
+        # 更可靠的方法是检查 function_cards 列表中的对应卡片状态
+        card_widget = None
+        if hasattr(self, 'function_cards'):
+            for card in self.function_cards:
+                # 需要一种方式将 name 映射回 card 对象，或者在创建时保存映射
+                # 假设可以通过查找 QLabel 的文本来临时匹配 (不够健壮)
+                name_label = card.findChild(QLabel, options=Qt.FindChildrenRecursively)
+                if name_label and name_label.text() == name:
+                    card_widget = card
+                    break
+        
+        # 检查状态
+        if card_widget and card_widget.property("disabled"):
+            # 如果卡片是禁用的，不做任何事或给出提示
+            # self.output_text_edit.append(f"功能 '{name}' 当前不可用，请先确保环境检测通过。")
+            return
+        
+        # 只有在非检测状态且卡片未被禁用时才处理点击事件
+        if not self.is_checking_env:
             self.card_clicked.emit(name)
