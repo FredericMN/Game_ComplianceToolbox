@@ -821,7 +821,9 @@ class CopyrightQuery:
                     except Exception as save_e:
                            self.update_progress(f"保存Excel时出错: {str(save_e)}")
                 
-                self.random_delay(2, 4)
+                # 在处理完一个游戏后增加较长的随机延迟（3-5秒）
+                self.random_delay(3, 5)
+                self.update_progress("增加随机延迟，减轻反爬机制作用...")
             
             # 保存最终结果
             try:
