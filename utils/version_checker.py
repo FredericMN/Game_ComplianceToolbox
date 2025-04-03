@@ -9,12 +9,24 @@ from packaging import version  # 新增标准版本库
 import time
 import json  # 导入json模块处理配置文件
 import datetime  # 用于处理缓存时间
+import sys
 
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 OWNER = "FredericMN"  # 替换为你的 GitHub 用户名
 REPO = "Game_ComplianceToolbox"  # 替换为你的仓库名称
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
-CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'version_cache.json')
+
+# 获取软件根目录（支持打包后的环境）
+def get_app_root():
+    # 如果是PyInstaller打包的环境
+    if getattr(sys, 'frozen', False):
+        # PyInstaller创建临时文件夹并将路径存储在_MEIPASS
+        return os.path.dirname(sys.executable)
+    # 开发环境
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 配置文件和缓存文件放在软件根目录
+CONFIG_PATH = os.path.join(get_app_root(), 'config.json')
+CACHE_PATH = os.path.join(get_app_root(), 'version_cache.json')
 
 # 默认GitHub令牌
 DEFAULT_TOKEN = "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"
