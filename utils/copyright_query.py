@@ -17,6 +17,42 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementNotInteractableException
 
+# 导入WebDriver辅助类
+try:
+    from utils.webdriver_helper import WebDriverHelper
+except ImportError:
+    # 如果导入失败，尝试相对导入
+    try:
+        from .webdriver_helper import WebDriverHelper
+    except ImportError:
+        # 如果还是导入失败，创建一个简易的辅助类
+        class WebDriverHelper:
+            @staticmethod
+            def create_driver(options=None, headless=True, progress_callback=None):
+                # 默认使用原始方法创建浏览器
+                from webdriver_manager.microsoft import EdgeChromiumDriverManager
+                edge_options = options or webdriver.EdgeOptions()
+                if headless:
+                    edge_options.add_argument("--headless")
+                return webdriver.Edge(
+                    service=EdgeService(EdgeChromiumDriverManager().install()),
+                    options=edge_options
+                )
+            
+            @staticmethod
+            def quit_driver(driver):
+                if driver:
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+
+# 导入驱动管理器
+try:
+    from utils.driver_manager import driver_manager
+except ImportError:
+    pass  # 简化导入处理，WebDriverHelper中已经有备选方案
+
 # 导入任务管理器（如果不存在需要先导入）
 try:
     from utils.task_manager import task_manager
@@ -574,7 +610,7 @@ class CopyrightQuery:
              df_result[count_col] = pd.Series(dtype='int')
         # --- 类型处理结束 ---
 
-        # 创建Edge浏览器驱动
+        # 创建Edge浏览器选项
         opt = webdriver.EdgeOptions()
         opt.add_argument('--disable-extensions')
         opt.add_argument('--no-sandbox')
@@ -588,11 +624,27 @@ class CopyrightQuery:
         
         driver = None
         try:
-            self.update_progress("正在初始化Edge浏览器...", 25)
-            driver = webdriver.Edge(
-                service=EdgeService(EdgeChromiumDriverManager().install()),
-                options=opt
+            # 使用WebDriverHelper创建浏览器实例
+            self.update_progress("正在准备启动浏览器...", 20)
+            
+            # 先尝试清理可能存在的残留进程
+            WebDriverHelper.kill_msedgedriver()
+            self.update_progress("已清理可能存在的WebDriver进程", 21)
+            
+            # 创建浏览器实例
+            driver = WebDriverHelper.create_driver(
+                options=opt, 
+                headless=False,  # 不使用无头模式，因为需要用户登录
+                progress_callback=self.update_progress
             )
+            
+            if not driver:
+                self.update_progress("创建浏览器实例失败，请检查环境或网络连接后重试", 0)
+                if old_callback:
+                    self.progress_callback = old_callback
+                return None
+                
+            self.update_progress("浏览器实例创建成功！", 30)
             
             # 注册WebDriver到任务管理器
             task_manager.register_webdriver(driver)
@@ -847,7 +899,8 @@ class CopyrightQuery:
                 # 取消注册WebDriver
                 task_manager.unregister_webdriver(driver)
                 try:
-                    driver.quit()
+                    # 使用WebDriverHelper安全关闭浏览器
+                    WebDriverHelper.quit_driver(driver)
                     self.update_progress("浏览器已关闭", 100)
                 except Exception as e:
                     self.update_progress(f"关闭浏览器出错: {str(e)}")

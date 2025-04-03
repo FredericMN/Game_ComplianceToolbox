@@ -32,6 +32,9 @@ def cleanup_webdriver_temp_files():
         removed_count = 0
         failed_count = 0
         
+        # 跳过需要保留的目录
+        skip_patterns = ["webdriver_cache_fixed"]
+        
         # 第一阶段：彻底终止所有相关的驱动进程
         terminated_processes = set()
         
@@ -90,6 +93,17 @@ def cleanup_webdriver_temp_files():
             for path in glob.glob(os.path.join(temp_dir, pattern)):
                 try:
                     if os.path.isdir(path):
+                        # 检查是否是需要跳过的目录
+                        should_skip = False
+                        for skip_pattern in skip_patterns:
+                            if skip_pattern in path:
+                                print(f"跳过缓存目录: {path}")
+                                should_skip = True
+                                break
+                        
+                        if should_skip:
+                            continue
+                            
                         # 获取目录修改时间
                         mtime = os.path.getmtime(path)
                         to_clean.append((path, mtime))
@@ -260,9 +274,42 @@ def ensure_final_cleanup():
     except Exception as e:
         print(f"最终清理时出错: {str(e)}")
 
+def init_webdriver_manager():
+    """初始化WebDriver管理器，加载缓存"""
+    try:
+        print("正在初始化WebDriver管理器...")
+        try:
+            # 尝试导入WebDriverHelper并初始化
+            from utils.webdriver_helper import WebDriverHelper
+            if WebDriverHelper.init():
+                # 尝试获取缓存的WebDriver路径
+                from utils.driver_manager import driver_manager
+                driver_path = driver_manager.get_driver_path()
+                if driver_path:
+                    print(f"已加载WebDriver缓存: {driver_path}")
+                else:
+                    print("未找到WebDriver缓存，将在需要时自动下载")
+                
+                # 显示缓存目录信息
+                cache_dir = driver_manager.get_cache_dir()
+                print(f"WebDriver缓存目录: {cache_dir}")
+                return True
+            else:
+                print("WebDriver管理器初始化失败，将在需要时重新尝试")
+        except ImportError as e:
+            print(f"导入WebDriver管理器模块失败: {str(e)}")
+        except Exception as e:
+            print(f"初始化WebDriver管理器时出错: {str(e)}")
+    except Exception as e:
+        print(f"WebDriver管理器初始化过程中发生异常: {str(e)}")
+    return False
+
 def main():
     # 应用启动时先执行一次全局清理
     cleanup_webdriver_temp_files()
+    
+    # 初始化WebDriver管理器
+    init_webdriver_manager()
     
     # 检查系统资源状态
     resource_check_ok = check_system_resources()

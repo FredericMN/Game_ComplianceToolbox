@@ -23,6 +23,31 @@ from PySide6.QtCore import Signal # Import Signal
 # 导入任务管理器
 from utils.task_manager import task_manager
 
+# 导入WebDriverHelper
+try:
+    from utils.webdriver_helper import WebDriverHelper
+except ImportError:
+    # 如果导入失败，创建一个简易的辅助类
+    class WebDriverHelper:
+        @staticmethod
+        def create_driver(options=None, headless=True, progress_callback=None):
+            # 默认使用原始方法创建浏览器
+            opt = options or webdriver.EdgeOptions()
+            if headless:
+                opt.add_argument("--headless")
+            return webdriver.Edge(
+                service=EdgeService(EdgeChromiumDriverManager().install()),
+                options=opt
+            )
+        
+        @staticmethod
+        def quit_driver(driver):
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+
 MAX_WORKERS = 3
 
 def progress_log_callback(callback, message):
@@ -128,9 +153,13 @@ def crawl_new_games(
         """
         day_str = d.strftime("%Y-%m-%d")
         opt = webdriver.EdgeOptions()
-        driver = webdriver.Edge(
-            service=EdgeService(EdgeChromiumDriverManager().install()),
-            options=opt
+        # 创建进度回调的包装器
+        wrapped_callback = lambda message, percent=None: helper_progress_callback(progress_callback, message)
+        # 使用WebDriverHelper创建WebDriver
+        driver = WebDriverHelper.create_driver(
+            options=opt, 
+            headless=True,
+            progress_callback=wrapped_callback
         )
         # 注册WebDriver到任务管理器
         task_manager.register_webdriver(driver)
@@ -233,7 +262,7 @@ def crawl_new_games(
         finally:
             # 取消注册并关闭WebDriver
             task_manager.unregister_webdriver(driver)
-            driver.quit()
+            WebDriverHelper.quit_driver(driver)
         return (day_str, results)
 
     completed=0
@@ -446,9 +475,13 @@ def match_version_numbers(
         driver = None
         res = None
         try:
-            driver = webdriver.Edge(
-                service=EdgeService(EdgeChromiumDriverManager().install()),
-                options=opt
+            # 创建进度回调的包装器
+            wrapped_callback = lambda message, percent=None: helper_progress_callback(progress_callback, message)
+            # 使用WebDriverHelper创建WebDriver
+            driver = WebDriverHelper.create_driver(
+                options=opt,
+                headless=True,
+                progress_callback=wrapped_callback
             )
             # 注册WebDriver到任务管理器
             task_manager.register_webdriver(driver)
@@ -520,10 +553,7 @@ def match_version_numbers(
             if driver:
                 # 取消注册WebDriver 
                 task_manager.unregister_webdriver(driver)
-                try:
-                    driver.quit()
-                except:
-                    pass
+                WebDriverHelper.quit_driver(driver)
 
         cache[g_name] = res
         return res
@@ -685,3 +715,10 @@ def match_version_numbers(
 
     if progress_percent_callback:
         progress_percent_callback(100, stage)
+
+def helper_progress_callback(callback, message):
+    """处理WebDriverHelper的进度回调，用于在爬虫的进度回调中转发消息"""
+    if callback:
+        progress_log_callback(callback, f"WebDriver: {message}")
+    else:
+        print(f"WebDriver: {message}")

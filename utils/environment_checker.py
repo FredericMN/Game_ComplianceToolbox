@@ -21,6 +21,20 @@ import glob
 import random
 import datetime
 
+# 导入驱动管理器
+try:
+    from utils.driver_manager import driver_manager
+except ImportError:
+    # 如果导入失败，创建一个简易的管理器
+    class SimpleDriverManager:
+        def set_driver_path(self, driver_path, driver_version=None):
+            return True
+        def get_driver_path(self):
+            return None
+        def is_initialized(self):
+            return False
+    driver_manager = SimpleDriverManager()
+
 
 class EnvironmentChecker(QObject):
     """环境检查类：并行执行若干检测项，并输出结果。"""
@@ -46,6 +60,9 @@ class EnvironmentChecker(QObject):
         
         # 移除在构造函数中的预清理，避免阻塞UI
         # self.pre_cleanup()
+        
+        # 进度回调函数
+        self.progress_callback = None
 
         # 自定义的环境检测项目列表，可按需扩展
         self.check_items = [
@@ -56,6 +73,10 @@ class EnvironmentChecker(QObject):
         
         # 当前运行时创建的临时目录列表，用于在结束时清理
         self.current_temp_dirs = []
+    
+    def set_progress_callback(self, callback):
+        """设置进度回调函数"""
+        self.progress_callback = callback
     
     def pre_cleanup(self):
         """应用启动时的预清理，确保没有残留的驱动进程和临时目录"""
@@ -79,11 +100,25 @@ class EnvironmentChecker(QObject):
         
         try:
             # 在后台线程中执行预清理，不阻塞UI
+            self.output_signal.emit("正在清理环境...")
             self.pre_cleanup()
             
-            for item_name, func in self.check_items:
+            # 如果驱动管理器已初始化，显示信息
+            if driver_manager.is_initialized():
+                driver_path = driver_manager.get_driver_path()
+                driver_version = driver_manager.get_driver_version() or "未知"
+                self.output_signal.emit(f"发现缓存的WebDriver: 路径={driver_path}, 版本={driver_version}")
+            
+            total_checks = len(self.check_items)
+            for idx, (item_name, func) in enumerate(self.check_items):
                 try:
-                    self.output_signal.emit(f"开始检测：{item_name} ...")
+                    progress_percent = int(25 + idx * 75 / total_checks)  # 进度从25%到100%
+                    self.output_signal.emit(f"开始检测：{item_name} ... ({idx+1}/{total_checks})")
+                    
+                    # 发送当前检测项的进度
+                    if self.progress_callback:
+                        self.progress_callback(f"正在检测: {item_name}", progress_percent)
+                    
                     ok, detail = func()  # 执行检测项，返回(bool, str)
                     
                     # 区分错误类型
@@ -155,43 +190,50 @@ class EnvironmentChecker(QObject):
     def cleanup_temp_directories(self, enforce_limit=False):
         """清理所有可能的临时目录，可选择限制总数"""
         try:
+            # 获取缓存的WebDriver路径
+            cached_driver_path = driver_manager.get_driver_path()
+            
             temp_dir = tempfile.gettempdir()
             patterns = ["edge_driver_*", "edge_temp_*", "edge_port_*", "edge_alt_*", "scoped_dir*"]
             
-            if enforce_limit:
-                # 如果需要强制限制目录总数，收集所有匹配的目录及其修改时间
-                all_dirs = []
-                for pattern in patterns:
-                    for path in glob.glob(os.path.join(temp_dir, pattern)):
-                        try:
-                            if os.path.isdir(path):
-                                # 获取目录修改时间
-                                mtime = os.path.getmtime(path)
-                                all_dirs.append((path, mtime))
-                        except Exception:
-                            pass
-                
-                # 如果目录数超过限制，按修改时间排序，保留最新的
-                if len(all_dirs) > self.MAX_TEMP_DIRS:
-                    # 按修改时间从新到旧排序
-                    all_dirs.sort(key=lambda x: x[1], reverse=True)
-                    # 只保留最新的MAX_TEMP_DIRS个，删除其余的
-                    for path, _ in all_dirs[self.MAX_TEMP_DIRS:]:
-                        try:
-                            shutil.rmtree(path, ignore_errors=True)
-                        except Exception:
-                            pass
-            else:
-                # 如果不需要限制总数，直接清理本次检测前存在的目录
-                for pattern in patterns:
-                    for path in glob.glob(os.path.join(temp_dir, pattern)):
-                        try:
-                            if os.path.isdir(path) and path not in self.current_temp_dirs:
+            all_dirs = []
+            for pattern in patterns:
+                for path in glob.glob(os.path.join(temp_dir, pattern)):
+                    try:
+                        # 跳过当前运行时创建的临时目录
+                        if path in self.current_temp_dirs:
+                            continue
+                            
+                        # 跳过包含缓存WebDriver的目录
+                        if cached_driver_path and os.path.exists(cached_driver_path):
+                            driver_dir = os.path.dirname(cached_driver_path)
+                            if path == driver_dir or driver_dir.startswith(path) or path.startswith(driver_dir):
+                                self.output_signal.emit(f"跳过缓存WebDriver目录: {path}")
+                                continue
+                        
+                        # 其余目录可清理
+                        if os.path.isdir(path):
+                            if enforce_limit:
+                                # 收集目录及修改时间，稍后处理
+                                all_dirs.append((path, os.path.getmtime(path)))
+                            else:
+                                # 直接清理
                                 shutil.rmtree(path, ignore_errors=True)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                    except Exception:
+                        pass
+                
+            # 如果启用限制，则保留最新的MAX_TEMP_DIRS个目录
+            if enforce_limit and all_dirs:
+                # 按修改时间从新到旧排序
+                all_dirs.sort(key=lambda x: x[1], reverse=True)
+                # 删除超出限制的旧目录
+                for path, _ in all_dirs[self.MAX_TEMP_DIRS:]:
+                    try:
+                        shutil.rmtree(path, ignore_errors=True)
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.output_signal.emit(f"清理临时目录时发生异常: {str(e)}")
 
     def quit_driver(self):
         """安全地关闭WebDriver"""
@@ -336,12 +378,51 @@ class EnvironmentChecker(QObject):
             return False, msg
 
     def check_edge_driver(self):
-        """简化版：检测Edge WebDriver是否可用，否则尝试下载/更新"""
+        """检测Edge WebDriver是否可用，否则尝试下载/更新"""
         if not self.edge_version:
             msg = "Edge版本未知，需先安装或检测Edge浏览器后再检测WebDriver。"
             self.output_signal.emit(msg)
             return False, msg
 
+        # 显示缓存目录信息
+        cache_dir = driver_manager.get_cache_dir()
+        cache_file = driver_manager.get_cache_file_path()
+        self.output_signal.emit(f"WebDriver缓存目录: {cache_dir}")
+        self.output_signal.emit(f"WebDriver缓存文件: {cache_file}")
+        
+        # 尝试加载缓存
+        if not driver_manager.is_initialized():
+            loaded = driver_manager.load_from_file()
+            if loaded:
+                self.output_signal.emit("已从文件加载WebDriver缓存")
+            else:
+                self.output_signal.emit("未找到可用的WebDriver缓存文件")
+
+        # 首先检查驱动管理器是否已有可用驱动
+        if driver_manager.is_initialized():
+            driver_path = driver_manager.get_driver_path()
+            
+            # 检查版本是否匹配
+            if driver_manager.version_matches(self.edge_version):
+                self.output_signal.emit(f"使用已缓存的WebDriver: {driver_path} (匹配浏览器版本: {self.edge_version})")
+                
+                # 验证缓存的驱动是否可用
+                result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
+                if result:
+                    self.driver = driver
+                    self.output_signal.emit("缓存的Edge WebDriver可用，无需更新。")
+                    return True, "缓存的Edge WebDriver可用。"
+                else:
+                    self.output_signal.emit("缓存的Edge WebDriver不可用，将重新配置。")
+            else:
+                self.output_signal.emit(f"浏览器版本 ({self.edge_version}) 与缓存的WebDriver版本 ({driver_manager.get_driver_version()}) 不匹配，需要更新。")
+            
+            # 清理失败的尝试
+            self.kill_msedgedriver()
+            self.cleanup_temp_directories()
+            # 如果版本不匹配或验证失败，重置缓存状态
+            driver_manager.reset()
+        
         self.output_signal.emit("检测Edge WebDriver...")
         
         # 1. 检测前清理驱动进程和旧目录
@@ -352,22 +433,36 @@ class EnvironmentChecker(QObject):
         driver_path = None
         # 尝试自动获取当前缓存的或已安装的驱动路径
         try:
-            # 使用 webdriver-manager 查找已存在的驱动
-            driver_path = EdgeChromiumDriverManager().get_driver_path()
+            # 修复：EdgeChromiumDriverManager没有get_driver_path方法
+            # 使用install方法获取已安装驱动的路径
+            driver_path = EdgeChromiumDriverManager().install()
             if driver_path and os.path.exists(driver_path):
                  self.output_signal.emit(f"找到已存在的WebDriver: {driver_path}")
             else:
                  driver_path = None # 如果没找到或路径无效，则置空
-        except Exception:
+        except Exception as e:
+             self.output_signal.emit(f"查找已存在的WebDriver时出错: {str(e)}")
              driver_path = None # 获取失败则置空
 
         # 2. 优先尝试核心策略：无头+唯一配置 (使用找到的或让Selenium自动找)
         try:
-            # self.output_signal.emit("尝试策略：无头模式 + 唯一临时配置") # 减少冗余信息
             result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
             if result:
                 self.driver = driver
                 self.output_signal.emit("Edge WebDriver已正确配置。")
+                
+                # 将成功的驱动路径缓存到驱动管理器并保存
+                if driver_path:
+                    try:
+                        success = driver_manager.set_driver_path(driver_path, self.edge_version)
+                        if success:
+                            self.output_signal.emit(f"已缓存WebDriver路径: {driver_path}")
+                            self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                        else:
+                            self.output_signal.emit("缓存WebDriver路径失败")
+                    except Exception as e:
+                        self.output_signal.emit(f"保存WebDriver缓存时出错: {str(e)}")
+                
                 return True, "Edge WebDriver已正确配置。"
             else:
                  # 如果第一次尝试失败，清理一下可能产生的临时文件和进程
@@ -384,8 +479,14 @@ class EnvironmentChecker(QObject):
         try:
             self.output_signal.emit("当前Edge WebDriver无法启动或配置错误，尝试自动下载/更新...")
             # 强制重新下载最新的驱动
-            driver_path = EdgeChromiumDriverManager(driver_version=self.edge_version.split('.')[0]).install()
-            self.output_signal.emit(f"新的Edge WebDriver已准备就绪: {driver_path}")
+            try:
+                driver_path = EdgeChromiumDriverManager(version=self.edge_version.split('.')[0]).install()
+                self.output_signal.emit(f"新的Edge WebDriver已准备就绪: {driver_path}")
+            except Exception as install_e:
+                self.output_signal.emit(f"下载WebDriver时出错: {str(install_e)}")
+                # 回退到无版本参数的下载方式
+                driver_path = EdgeChromiumDriverManager().install()
+                self.output_signal.emit(f"使用默认版本下载WebDriver: {driver_path}")
             
             # 确保驱动程序可执行 (在非Windows上设置权限)
             if sys.platform != 'win32':
@@ -399,11 +500,22 @@ class EnvironmentChecker(QObject):
             time.sleep(1)
             
             # 使用新驱动再次尝试核心策略
-            # self.output_signal.emit("尝试使用新驱动启动：无头模式 + 唯一临时配置") # 减少冗余信息
             result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
             if result:
                 self.driver = driver
                 self.output_signal.emit("Edge WebDriver已自动下载/更新并配置成功。")
+                
+                # 将成功的驱动路径缓存到驱动管理器并保存
+                try:
+                    success = driver_manager.set_driver_path(driver_path, self.edge_version)
+                    if success:
+                        self.output_signal.emit(f"已缓存新的WebDriver路径: {driver_path}")
+                        self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                    else:
+                        self.output_signal.emit("缓存新的WebDriver路径失败")
+                except Exception as e:
+                    self.output_signal.emit(f"保存新的WebDriver缓存时出错: {str(e)}")
+                
                 return True, "Edge WebDriver下载/更新并配置成功。"
             else:
                  # 如果使用新驱动的核心策略仍然失败，可以尝试一个备用策略（如随机端口）
@@ -415,6 +527,18 @@ class EnvironmentChecker(QObject):
                  if result:
                     self.driver = driver
                     self.output_signal.emit("Edge WebDriver已使用备用策略配置成功。")
+                    
+                    # 将成功的驱动路径缓存到驱动管理器并保存
+                    try:
+                        success = driver_manager.set_driver_path(driver_path, self.edge_version)
+                        if success:
+                            self.output_signal.emit(f"已使用备用策略缓存WebDriver路径: {driver_path}")
+                            self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                        else:
+                            self.output_signal.emit("使用备用策略缓存WebDriver路径失败")
+                    except Exception as e:
+                        self.output_signal.emit(f"保存备用策略WebDriver缓存时出错: {str(e)}")
+                    
                     return True, "Edge WebDriver下载/更新并使用备用策略配置成功。"
                  else:
                     # 如果备用策略也失败了，最后清理一次
