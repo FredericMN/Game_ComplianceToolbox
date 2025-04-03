@@ -717,8 +717,53 @@ def match_version_numbers(
         progress_percent_callback(100, stage)
 
 def helper_progress_callback(callback, message):
-    """处理WebDriverHelper的进度回调，用于在爬虫的进度回调中转发消息"""
-    if callback:
-        progress_log_callback(callback, f"WebDriver: {message}")
-    else:
-        print(f"WebDriver: {message}")
+    """处理WebDriverHelper的进度回调，过滤和简化WebDriver输出信息"""
+    # 定义需要保留的关键信息关键词
+    key_messages = [
+        "使用已缓存的WebDriver", 
+        "未找到缓存", 
+        "正在下载", 
+        "下载/安装完成",
+        "创建浏览器实例",
+        "浏览器实例创建成功",
+        "缓存WebDriver配置",
+        "创建WebDriver时出错"
+    ]
+    
+    # 检查消息是否包含关键信息
+    show_message = False
+    for key in key_messages:
+        if key in message:
+            show_message = True
+            break
+    
+    # 简化消息，删除过多细节
+    if "缓存目录" in message or "缓存文件" in message:
+        return  # 忽略缓存路径信息
+    
+    if "检测到Edge浏览器版本" in message:
+        return  # 忽略版本检测信息
+    
+    # 只显示关键节点信息
+    if show_message and callback:
+        # 进一步简化消息内容
+        if "使用已缓存的WebDriver" in message:
+            simplified = "使用已缓存的WebDriver配置"
+        elif "未找到缓存的WebDriver" in message:
+            simplified = "未找到可用WebDriver缓存，需要下载配置"
+        elif "正在下载" in message:
+            simplified = "正在下载WebDriver"
+        elif "下载/安装完成" in message:
+            simplified = "WebDriver下载完成"
+        elif "创建浏览器实例" in message and "成功" not in message:
+            simplified = "正在启动浏览器"
+        elif "浏览器实例创建成功" in message:
+            simplified = "浏览器启动成功"
+        elif "缓存WebDriver配置" in message:
+            simplified = "WebDriver配置已缓存，下次将加速启动"
+        elif "创建WebDriver时出错" in message:
+            simplified = f"启动浏览器失败: {message.split(':', 1)[1] if ':' in message else ''}"
+        else:
+            simplified = message
+        
+        progress_log_callback(callback, simplified)

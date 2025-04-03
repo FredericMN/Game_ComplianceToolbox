@@ -384,19 +384,16 @@ class EnvironmentChecker(QObject):
             self.output_signal.emit(msg)
             return False, msg
 
-        # 显示缓存目录信息
+        # 在UI上只显示简单信息，不显示详细的缓存路径
         cache_dir = driver_manager.get_cache_dir()
         cache_file = driver_manager.get_cache_file_path()
-        self.output_signal.emit(f"WebDriver缓存目录: {cache_dir}")
-        self.output_signal.emit(f"WebDriver缓存文件: {cache_file}")
         
         # 尝试加载缓存
         if not driver_manager.is_initialized():
             loaded = driver_manager.load_from_file()
             if loaded:
-                self.output_signal.emit("已从文件加载WebDriver缓存")
-            else:
-                self.output_signal.emit("未找到可用的WebDriver缓存文件")
+                self.output_signal.emit("已加载WebDriver缓存")
+            # 不需要显示"未找到缓存"的消息
 
         # 首先检查驱动管理器是否已有可用驱动
         if driver_manager.is_initialized():
@@ -404,18 +401,18 @@ class EnvironmentChecker(QObject):
             
             # 检查版本是否匹配
             if driver_manager.version_matches(self.edge_version):
-                self.output_signal.emit(f"使用已缓存的WebDriver: {driver_path} (匹配浏览器版本: {self.edge_version})")
+                self.output_signal.emit(f"使用已缓存的WebDriver配置")
                 
                 # 验证缓存的驱动是否可用
                 result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
                 if result:
                     self.driver = driver
-                    self.output_signal.emit("缓存的Edge WebDriver可用，无需更新。")
-                    return True, "缓存的Edge WebDriver可用。"
+                    self.output_signal.emit("缓存的WebDriver可用")
+                    return True, "缓存的WebDriver可用。"
                 else:
-                    self.output_signal.emit("缓存的Edge WebDriver不可用，将重新配置。")
+                    self.output_signal.emit("缓存的WebDriver不可用，需要重新配置")
             else:
-                self.output_signal.emit(f"浏览器版本 ({self.edge_version}) 与缓存的WebDriver版本 ({driver_manager.get_driver_version()}) 不匹配，需要更新。")
+                self.output_signal.emit(f"浏览器版本与WebDriver版本不匹配，需要更新")
             
             # 清理失败的尝试
             self.kill_msedgedriver()
@@ -437,11 +434,11 @@ class EnvironmentChecker(QObject):
             # 使用install方法获取已安装驱动的路径
             driver_path = EdgeChromiumDriverManager().install()
             if driver_path and os.path.exists(driver_path):
-                 self.output_signal.emit(f"找到已存在的WebDriver: {driver_path}")
+                 self.output_signal.emit("找到现有的WebDriver")
             else:
                  driver_path = None # 如果没找到或路径无效，则置空
         except Exception as e:
-             self.output_signal.emit(f"查找已存在的WebDriver时出错: {str(e)}")
+             self.output_signal.emit(f"查找WebDriver失败: {str(e)}")
              driver_path = None # 获取失败则置空
 
         # 2. 优先尝试核心策略：无头+唯一配置 (使用找到的或让Selenium自动找)
@@ -449,19 +446,18 @@ class EnvironmentChecker(QObject):
             result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
             if result:
                 self.driver = driver
-                self.output_signal.emit("Edge WebDriver已正确配置。")
+                self.output_signal.emit("Edge WebDriver已正确配置")
                 
                 # 将成功的驱动路径缓存到驱动管理器并保存
                 if driver_path:
                     try:
                         success = driver_manager.set_driver_path(driver_path, self.edge_version)
                         if success:
-                            self.output_signal.emit(f"已缓存WebDriver路径: {driver_path}")
-                            self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                            self.output_signal.emit("WebDriver已缓存，下次将加速启动")
                         else:
-                            self.output_signal.emit("缓存WebDriver路径失败")
+                            self.output_signal.emit("缓存WebDriver失败")
                     except Exception as e:
-                        self.output_signal.emit(f"保存WebDriver缓存时出错: {str(e)}")
+                        self.output_signal.emit(f"保存WebDriver缓存失败: {str(e)}")
                 
                 return True, "Edge WebDriver已正确配置。"
             else:
@@ -477,16 +473,16 @@ class EnvironmentChecker(QObject):
 
         # 3. 如果失败，尝试下载/更新驱动并重试核心策略
         try:
-            self.output_signal.emit("当前Edge WebDriver无法启动或配置错误，尝试自动下载/更新...")
+            self.output_signal.emit("尝试下载新的WebDriver...")
             # 强制重新下载最新的驱动
             try:
                 driver_path = EdgeChromiumDriverManager(version=self.edge_version.split('.')[0]).install()
-                self.output_signal.emit(f"新的Edge WebDriver已准备就绪: {driver_path}")
+                self.output_signal.emit("WebDriver下载完成")
             except Exception as install_e:
-                self.output_signal.emit(f"下载WebDriver时出错: {str(install_e)}")
+                self.output_signal.emit(f"下载WebDriver出错，尝试使用默认版本")
                 # 回退到无版本参数的下载方式
                 driver_path = EdgeChromiumDriverManager().install()
-                self.output_signal.emit(f"使用默认版本下载WebDriver: {driver_path}")
+                self.output_signal.emit("WebDriver下载完成")
             
             # 确保驱动程序可执行 (在非Windows上设置权限)
             if sys.platform != 'win32':
@@ -503,41 +499,39 @@ class EnvironmentChecker(QObject):
             result, driver = self._try_edge_with_unique_profile(driver_path=driver_path)
             if result:
                 self.driver = driver
-                self.output_signal.emit("Edge WebDriver已自动下载/更新并配置成功。")
+                self.output_signal.emit("WebDriver已更新并配置成功")
                 
                 # 将成功的驱动路径缓存到驱动管理器并保存
                 try:
                     success = driver_manager.set_driver_path(driver_path, self.edge_version)
                     if success:
-                        self.output_signal.emit(f"已缓存新的WebDriver路径: {driver_path}")
-                        self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                        self.output_signal.emit("WebDriver已缓存，下次将加速启动")
                     else:
-                        self.output_signal.emit("缓存新的WebDriver路径失败")
+                        self.output_signal.emit("缓存WebDriver失败")
                 except Exception as e:
-                    self.output_signal.emit(f"保存新的WebDriver缓存时出错: {str(e)}")
+                    self.output_signal.emit(f"保存WebDriver缓存出错")
                 
                 return True, "Edge WebDriver下载/更新并配置成功。"
             else:
                  # 如果使用新驱动的核心策略仍然失败，可以尝试一个备用策略（如随机端口）
-                 self.output_signal.emit("使用新驱动的核心策略失败，尝试备用策略...")
+                 self.output_signal.emit("尝试备用启动策略...")
                  self.kill_msedgedriver()
                  self.cleanup_temp_directories(enforce_limit=False)
                  time.sleep(0.5)
                  result, driver = self._try_edge_with_random_port(driver_path=driver_path)
                  if result:
                     self.driver = driver
-                    self.output_signal.emit("Edge WebDriver已使用备用策略配置成功。")
+                    self.output_signal.emit("WebDriver已使用备用策略配置成功")
                     
                     # 将成功的驱动路径缓存到驱动管理器并保存
                     try:
                         success = driver_manager.set_driver_path(driver_path, self.edge_version)
                         if success:
-                            self.output_signal.emit(f"已使用备用策略缓存WebDriver路径: {driver_path}")
-                            self.output_signal.emit(f"缓存文件已保存到: {driver_manager.get_cache_file_path()}")
+                            self.output_signal.emit("WebDriver已缓存，下次将加速启动")
                         else:
-                            self.output_signal.emit("使用备用策略缓存WebDriver路径失败")
+                            self.output_signal.emit("缓存WebDriver失败")
                     except Exception as e:
-                        self.output_signal.emit(f"保存备用策略WebDriver缓存时出错: {str(e)}")
+                        self.output_signal.emit("保存WebDriver缓存出错")
                     
                     return True, "Edge WebDriver下载/更新并使用备用策略配置成功。"
                  else:
@@ -546,7 +540,7 @@ class EnvironmentChecker(QObject):
                     self.cleanup_temp_directories(enforce_limit=False)
                     
         except Exception as e:
-            self.output_signal.emit(f"下载或使用新Edge WebDriver失败: {str(e)}")
+            self.output_signal.emit(f"下载或使用新WebDriver失败: {str(e)}")
             # 失败后清理
             self.kill_msedgedriver()
             self.cleanup_temp_directories(enforce_limit=False)

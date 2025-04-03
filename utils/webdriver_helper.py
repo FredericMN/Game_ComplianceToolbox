@@ -92,13 +92,14 @@ class WebDriverHelper:
         return None
     
     @staticmethod
-    def create_driver(options=None, headless=True, progress_callback=None):
+    def create_driver(options=None, headless=True, progress_callback=None, filter_messages=True):
         """创建WebDriver实例
         
         Args:
             options: 自定义的WebDriver选项，如果为None则使用默认选项
             headless: 是否使用无头模式
             progress_callback: 进度回调函数，接收(message, percent)参数
+            filter_messages: 是否过滤和简化消息输出
             
         Returns:
             WebDriver实例或None
@@ -108,10 +109,15 @@ class WebDriverHelper:
         
         def update_progress(message, percent=None):
             """更新进度信息"""
-            if progress_callback:
-                progress_callback(message, percent)
+            if not progress_callback:
+                return
+                
+            if filter_messages:
+                # 使用过滤器简化输出
+                WebDriverHelper.filter_progress_message(progress_callback, message, percent)
             else:
-                print(message)
+                # 直接输出全部信息
+                progress_callback(message, percent)
         
         # 创建默认选项
         if options is None:
@@ -279,5 +285,58 @@ class WebDriverHelper:
             print(f"终止msedgedriver进程时出错: {str(e)}")
             return False
             
+    @staticmethod
+    def filter_progress_message(callback, message, percent=None):
+        """过滤过多的细节，只显示关键节点信息"""
+        if not callback:
+            return
+            
+        # 定义需要保留的关键信息关键词
+        key_messages = [
+            "使用已缓存的WebDriver", 
+            "未找到缓存", 
+            "正在下载", 
+            "下载/安装完成",
+            "创建浏览器实例",
+            "浏览器实例创建成功",
+            "缓存WebDriver配置",
+            "创建WebDriver时出错"
+        ]
+        
+        # 忽略非关键信息
+        show_message = False
+        for key in key_messages:
+            if key in message:
+                show_message = True
+                break
+                
+        # 忽略这些太详细的信息
+        if "缓存目录" in message or "缓存文件" in message:
+            return
+            
+        if "检测到Edge浏览器版本" in message:
+            return
+            
+        # 只显示关键节点信息
+        if show_message:
+            # 简化消息内容
+            if "使用已缓存的WebDriver" in message:
+                callback("使用已缓存的WebDriver配置", percent)
+            elif "未找到缓存的WebDriver" in message:
+                callback("未找到可用WebDriver缓存，需要下载配置", percent)
+            elif "正在下载" in message:
+                callback("正在下载WebDriver", percent)
+            elif "下载/安装完成" in message:
+                callback("WebDriver下载完成", percent)
+            elif "创建浏览器实例" in message and "成功" not in message:
+                callback("正在启动浏览器", percent)
+            elif "浏览器实例创建成功" in message:
+                callback("浏览器启动成功", percent)
+            elif "缓存WebDriver配置" in message:
+                callback("WebDriver配置已缓存，下次将加速启动", percent)
+            elif "创建WebDriver时出错" in message:
+                error_detail = message.split(':', 1)[1].strip() if ':' in message else ''
+                callback(f"启动浏览器失败: {error_detail}", percent)
+
 # 初始化WebDriverHelper
 WebDriverHelper.init() 

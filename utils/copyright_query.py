@@ -108,7 +108,59 @@ class CopyrightQuery:
         else:
             print(message)
             return True
+    
+    def filter_webdriver_message(self, message, percent=None):
+        """过滤WebDriver信息，只保留关键状态"""
+        # 定义需要保留的关键信息关键词
+        key_messages = [
+            "使用已缓存的WebDriver", 
+            "未找到缓存", 
+            "正在下载", 
+            "下载/安装完成",
+            "创建浏览器实例",
+            "浏览器实例创建成功",
+            "缓存WebDriver配置",
+            "创建WebDriver时出错"
+        ]
         
+        # 检查消息是否包含关键信息
+        show_message = False
+        for key in key_messages:
+            if key in message:
+                show_message = True
+                break
+        
+        # 简化消息，删除过多细节
+        if "缓存目录" in message or "缓存文件" in message:
+            return None  # 忽略缓存路径信息
+        
+        if "检测到Edge浏览器版本" in message:
+            return None  # 忽略版本检测信息
+        
+        # 只显示关键节点信息
+        if show_message:
+            # 进一步简化消息内容
+            if "使用已缓存的WebDriver" in message:
+                return self.update_progress("使用已缓存的WebDriver配置", percent)
+            elif "未找到缓存的WebDriver" in message:
+                return self.update_progress("未找到可用WebDriver缓存，需要下载配置", percent)
+            elif "正在下载" in message:
+                return self.update_progress("正在下载WebDriver", percent)
+            elif "下载/安装完成" in message:
+                return self.update_progress("WebDriver下载完成", percent)
+            elif "创建浏览器实例" in message and "成功" not in message:
+                return self.update_progress("正在启动浏览器", percent)
+            elif "浏览器实例创建成功" in message:
+                return self.update_progress("浏览器启动成功", percent)
+            elif "缓存WebDriver配置" in message:
+                return self.update_progress("WebDriver配置已缓存，下次将加速启动", percent)
+            elif "创建WebDriver时出错" in message:
+                error_detail = message.split(':', 1)[1].strip() if ':' in message else ''
+                return self.update_progress(f"启动浏览器失败: {error_detail}", percent)
+        
+        # 默认不显示其他WebDriver消息
+        return None
+    
     def random_delay(self, min_sec=1.0, max_sec=3.0):
         """避免爬取过快"""
         time.sleep(random.uniform(min_sec, max_sec))
@@ -635,7 +687,7 @@ class CopyrightQuery:
             driver = WebDriverHelper.create_driver(
                 options=opt, 
                 headless=False,  # 不使用无头模式，因为需要用户登录
-                progress_callback=self.update_progress
+                progress_callback=self.filter_webdriver_message
             )
             
             if not driver:
