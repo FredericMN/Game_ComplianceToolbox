@@ -826,6 +826,8 @@ class CopyrightQuery:
                         clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
                         if not clicked_filter1:
                             continue
+                        # 如果确认后继续，需要重置暂停标志
+                        self.paused = False # <-- 确保重置暂停状态
                     
                     self.random_delay(0.5, 1) # 减少延迟
                     clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
@@ -841,44 +843,79 @@ class CopyrightQuery:
                         if not self.wait_for_page_load(driver, timeout=15):
                             continue
                             
-                        # 重新尝试点击两个筛选条件
+                        # 重新尝试点击前两个筛选条件
                         clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
                         self.random_delay(0.5, 1)
                         clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
                         if not clicked_filter1 or not clicked_filter2:
                             continue
-                    
+                        # 如果确认后继续，需要重置暂停标志
+                        self.paused = False # <-- 确保重置暂停状态
+
+                    # --- 新增点击 '3-5年' ---
+                    self.random_delay(0.5, 1) # 增加点击间隔
+                    clicked_filter3 = self.click_filter_checkbox(driver, '3-5年')
+
+                    # 检查第三个筛选条件是否触发了反爬机制
+                    if self.paused:
+                        # 保存当前进度
+                        df_result.to_excel(new_excel_path, index=False)
+                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
+
+                        # 重置当前页面并重新尝试
+                        driver.get(search_url)
+                        if not self.wait_for_page_load(driver, timeout=15):
+                            continue
+
+                        # 重新尝试点击所有三个筛选条件
+                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
+                        self.random_delay(0.5, 1)
+                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
+                        self.random_delay(0.5, 1)
+                        clicked_filter3 = self.click_filter_checkbox(driver, '3-5年')
+                        if not clicked_filter1 or not clicked_filter2 or not clicked_filter3:
+                            continue
+                        # 如果确认后继续，需要重置暂停标志
+                        self.paused = False # <-- 确保重置暂停状态
+                    # --- 新增结束 ---
+
                     self.random_delay(1, 2) # 点击后等待页面刷新
 
-                    if not clicked_filter1 or not clicked_filter2:
-                        self.update_progress("警告：未能成功点击所有筛选条件，结果可能不准确。")
+                    # 更新成功检查逻辑，包含第三个筛选器
+                    if not clicked_filter1 or not clicked_filter2 or not clicked_filter3:
+                        self.update_progress("警告：未能成功点击所有筛选条件 ('1年内', '1-3年', '3-5年')，结果可能不准确。")
                     else:
-                        self.update_progress("已成功应用筛选条件。")
+                        self.update_progress("已成功应用筛选条件 ('1年内', '1-3年', '3-5年')。")
 
                     # 获取搜索结果数量 (应用筛选后)
                     result_count = self.get_search_result_count(driver)
                     
-                    # 检查是否因为反爬机制暂停了
+                    # 检查是否因为反爬机制暂停了 (获取结果数量后)
                     if self.paused:
                         # 保存当前进度
                         df_result.to_excel(new_excel_path, index=False)
                         self.update_progress(f"已保存当前进度到: {new_excel_path}")
                         
-                        # 重置当前页面并重新尝试
+                        # 重置当前页面并重新尝试整个流程
                         driver.get(search_url)
                         if not self.wait_for_page_load(driver, timeout=15):
                             continue
                             
-                        # 重新尝试整个过程
+                        # 重新尝试整个筛选和获取结果数量过程
                         clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
                         self.random_delay(0.5, 1)
                         clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
+                        self.random_delay(0.5, 1)
+                        clicked_filter3 = self.click_filter_checkbox(driver, '3-5年') # 别忘了这里也要重试
                         self.random_delay(1, 2)
                         result_count = self.get_search_result_count(driver)
                         
-                        if self.paused:  # 如果再次暂停，跳过当前游戏
+                        # 如果再次暂停，跳过当前游戏
+                        if self.paused: 
                             continue
-                    
+                        # 如果确认后继续，需要重置暂停标志
+                        self.paused = False # <-- 确保重置暂停状态
+
                     self.update_progress(f"筛选后搜索结果数量: {result_count}")
                     
                     matched_copyright_owner = ""
@@ -904,8 +941,8 @@ class CopyrightQuery:
                                 df_result.to_excel(new_excel_path, index=False)
                                 self.update_progress(f"已保存当前进度到: {new_excel_path}")
                                 
-                                # 重置当前页面并重新尝试
-                                continue
+                                # 重置当前页面并重新尝试整个流程
+                                continue # 跳到下一个游戏的处理
                             
                             df_result.loc[row_idx, "匹配著作权人"] = matched_copyright_owner
                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = is_game_name_match
