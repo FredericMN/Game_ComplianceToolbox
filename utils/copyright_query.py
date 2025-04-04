@@ -7,6 +7,7 @@ from urllib.parse import quote
 import shutil  # 用于复制文件
 import openpyxl
 import sys
+from selenium.webdriver.common.keys import Keys
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -732,39 +733,62 @@ class CopyrightQuery:
             
             # 使用第一个游戏作为示例，访问企查查著作权查询页面
             first_game = list(game_operator_dict.keys())[0]
-            encoded_name = quote(first_game)
-            qcc_url = f"https://www.qcc.com/web_searchCopyright?searchKey={encoded_name}&type=2"
+            # encoded_name = quote(first_game) # 第一次访问时再编码
+            # qcc_url = f"https://www.qcc.com/web_searchCopyright?searchKey={encoded_name}&type=2" # 移到循环内
             
-            self.update_progress(f"正在访问企查查著作权查询页面: {qcc_url}", 30)
-            driver.get(qcc_url)
+            # self.update_progress(f"正在访问企查查著作权查询页面: {qcc_url}", 30)
+            # driver.get(qcc_url) # 移到循环内处理首次访问
             
-            # 等待页面加载
-            self.wait_for_page_load(driver)
+            # # 等待页面加载 # 移到循环内处理首次访问
+            # self.wait_for_page_load(driver)
             
             # 提示用户登录
-            self.update_progress("\n检测到需要登录企查查账号。请登录后继续...", 35)
+            self.update_progress("\n检测到可能需要登录企查查账号。", 35)
+            self.update_progress("如果页面长时间未加载或显示登录界面，请手动登录。", 35)
+            self.update_progress("脚本将在登录后或可直接访问时继续。", 35)
             
-            # 调用登录确认回调
-            if self.login_confirm_callback:
-                login_confirmed = self.login_confirm_callback()
-                if not login_confirmed:
-                    self.update_progress("用户取消了登录，终止查询", 0)
-                    if old_callback:
-                        self.progress_callback = old_callback
-                    return None
-            else:
-                # 如果没有回调，使用旧的控制台交互方式
-                self.update_progress("1. 请在浏览器中登录您的企查查账号")
-                self.update_progress("2. 登录完成后，请在此终端输入数字1并按回车键继续")
-                
-                # 等待用户确认已登录
-                while True:
-                    user_input = input("请输入数字1表示已完成登录: ")
-                    if user_input.strip() == "1":
-                        self.update_progress("已确认登录完成，继续处理...")
-                        break
-                    else:
-                        self.update_progress("输入无效，请输入数字1")
+            # --- 调整：首次访问放在循环内处理，并增加登录确认 --- 
+            is_first_game = True # 标记是否是处理第一个游戏
+            qcc_base_url = "https://www.qcc.com/web_searchCopyright?type=2&searchKey=" # 基础URL，后面拼接游戏名
+            is_state_filtered = False # <--- 新增状态变量：跟踪页面是否预期为已筛选状态
+
+            # --- 登录确认逻辑提前 --- 
+            # 访问一个基础页面（如搜索首页）来触发登录检查
+            try:
+                driver.get("https://www.qcc.com/") # 访问首页，通常需要登录才能搜索
+                self.wait_for_page_load(driver, 10)
+                # 简单检查是否跳转到了登录页 (URL可能包含passport)
+                if "passport.qcc.com" in driver.current_url:
+                    login_needed = True
+                else:
+                    # 尝试定位一个登录后才有的元素，例如用户头像或用户名
+                    try:
+                        # 此处需要替换为实际登录后可见元素的定位器
+                        # 例如： driver.find_element(By.CSS_SELECTOR, ".user-avatar") 
+                        # 暂时假设能找到某个元素表示已登录
+                        driver.find_element(By.XPATH, "//a[contains(@href, '/user_center')]") # 示例：用户中心链接
+                        login_needed = False
+                        self.update_progress("检测到已登录状态。")
+                    except NoSuchElementException:
+                        login_needed = True 
+            except Exception as e_nav:
+                 self.update_progress(f"访问企查查首页检查登录状态时出错: {e_nav}，假设需要登录。")
+                 login_needed = True
+
+            if login_needed:
+                self.update_progress("请在弹出的浏览器窗口中登录您的企查查账号。", 36)
+                if self.login_confirm_callback:
+                    login_confirmed = self.login_confirm_callback() # 调用回调等待用户确认
+                    if not login_confirmed:
+                        self.update_progress("用户取消了登录，终止查询", 0)
+                        if old_callback: self.progress_callback = old_callback
+                        return None
+                    self.update_progress("登录已确认，继续查询。", 37)
+                else:
+                    # 控制台确认方式
+                    input("请在浏览器中完成登录后，按回车键继续...")
+                    self.update_progress("继续查询...", 37)
+            # --- 登录确认结束 --- 
             
             # 获取游戏列表，转换为列表以便按索引访问
             game_list = list(game_operator_dict.items())
@@ -787,236 +811,303 @@ class CopyrightQuery:
                                          35 + int(60 * (i / total_games)))
                     self.update_progress(f"游戏名称: {game_name}, 运营单位: {operator if operator else '未提供'}")
                     
-                    encoded_name = quote(game_name)
-                    search_url = f"https://www.qcc.com/web_searchCopyright?searchKey={encoded_name}&type=2"
-                    
-                    # 访问搜索页面
-                    self.update_progress(f"访问搜索页面: {search_url}")
-                    driver.get(search_url)
-                    
-                    # 等待页面加载完成
-                    if not self.wait_for_page_load(driver, timeout=15):
+                    # --- 步骤1: 执行搜索 (区分首次和后续) ---
+                    if is_first_game:
+                        # 首次访问，使用URL导航
+                        encoded_name = quote(game_name)
+                        search_url = qcc_base_url + encoded_name
+                        self.update_progress(f"首次访问，使用URL: {search_url}")
+                        try:
+                             driver.get(search_url)
+                             is_first_game = False # 更新标记
+                        except Exception as e_first_nav:
+                             self.update_progress(f"首次通过URL访问失败: {e_first_nav}, 跳过此游戏")
+                             row_idx = row_indices.get(game_name)
+                             if row_idx is not None: df_result.loc[row_idx, "是否建议人工排查"] = "是 (首次URL访问失败)"
+                             continue # 进行下一个游戏
+                    else:
+                        # 后续访问，使用页面内搜索框
+                        self.update_progress(f"后续访问，使用页面内搜索框查询: '{game_name}'")
+                        try:
+                            search_box_id = "copyrightSearchKey"
+                            wait = WebDriverWait(driver, 15)
+                            search_input = wait.until(EC.presence_of_element_located((By.ID, search_box_id)))
+                            self.update_progress("找到搜索框，准备输入...")
+                            # search_input.clear() # 改用更可靠的清空方式
+                            search_input.send_keys(Keys.CONTROL + "a") # 全选
+                            search_input.send_keys(Keys.DELETE)     # 删除
+                            self.update_progress("已清空搜索框内容")
+                            search_input.send_keys(game_name)
+                            search_input.send_keys(Keys.RETURN) # 模拟回车
+                            self.update_progress(f"已在搜索框输入 '{game_name}' 并回车")
+                        except (TimeoutException, NoSuchElementException) as e_searchbox:
+                            self.update_progress(f"错误：无法找到或操作搜索框: {e_searchbox}")
+                            self.save_debug_info(driver, f"searchbox_error_{game_name[:10]}")
+                            self.update_progress("尝试回退到URL导航...")
+                            try:
+                                encoded_name = quote(game_name)
+                                search_url = qcc_base_url + encoded_name
+                                driver.get(search_url)
+                                self.update_progress(f"URL回退导航成功: {search_url}")
+                            except Exception as e_fallback_nav:
+                                 self.update_progress(f"URL回退失败: {e_fallback_nav}, 跳过此游戏")
+                                 row_idx = row_indices.get(game_name)
+                                 if row_idx is not None: df_result.loc[row_idx, "是否建议人工排查"] = "是 (搜索框和URL导航均失败)"
+                                 continue # 进行下一个游戏
+                                 
+                    # 等待页面加载完成 (无论哪种搜索方式后都需要)
+                    if not self.wait_for_page_load(driver, timeout=20): # 增加超时时间
                         self.update_progress("页面加载失败，尝试刷新...")
                         driver.refresh()
-                        self.random_delay(1, 2)
-                        if not self.wait_for_page_load(driver, timeout=15):
+                        self.random_delay(2, 3)
+                        if not self.wait_for_page_load(driver, timeout=20):
                             self.update_progress("刷新后仍然无法加载页面，跳过此游戏")
-                            # 记录错误或标记
                             row_idx = row_indices.get(game_name)
-                            if row_idx is not None:
-                                df_result.loc[row_idx, "是否建议人工排查"] = "是 (页面加载失败)"
-                            continue
-                    
-                    # --- 步骤1 & 2: 提取并暂存无筛选结果 --- 
-                    self.update_progress("开始提取无筛选时的初始结果...")
-                    initial_result_count = 0
-                    initial_matched_owner = ""
-                    initial_game_match = "否"
-                    initial_operator_match = "否"
-                    initial_manual_check = "是"
+                            if row_idx is not None: df_result.loc[row_idx, "是否建议人工排查"] = "是 (页面加载失败)"
+                            continue # 进行下一个游戏
+                    # --- 搜索执行结束 ---
+                            
+                    # --- 步骤2: 获取当前状态结果 (搜索后，显式操作筛选前) ---
+                    self.update_progress(f"\n获取当前页面状态结果 (预期状态: {'已筛选' if is_state_filtered else '未筛选'})...")
+                    current_state_count = 0
+                    current_state_owner = ""
+                    current_state_game_match = "否"
+                    current_state_operator_match = "否"
+                    current_state_manual_check = "是"
                     
                     try:
-                        initial_result_count = self.get_search_result_count(driver)
-                        # 检查暂停状态 (获取初始结果数后)
+                        current_state_count = self.get_search_result_count(driver)
+                        # 检查暂停状态 (获取当前状态结果数后)
                         if self.paused:
-                            df_result.to_excel(new_excel_path, index=False)
-                            self.update_progress(f"获取初始结果数时暂停，已保存进度: {new_excel_path}")
-                            # 重置页面并重试整个游戏流程
-                            continue # 跳到下一个游戏
+                             df_result.to_excel(new_excel_path, index=False)
+                             self.update_progress(f"获取当前状态结果数时暂停，已保存进度: {new_excel_path}")
+                             # 暂停后，无法确定状态，最好跳过当前，让下一个游戏重新开始判断
+                             # 并且重置状态标记，避免影响下一个游戏
+                             is_state_filtered = False # 重置状态
+                             continue # 跳到下一个游戏
+                             
+                        self.update_progress(f"当前状态结果数量: {current_state_count}")
                         
-                        self.update_progress(f"无筛选时初始结果数量: {initial_result_count}")
-                        
-                        if initial_result_count > 0:
+                        if current_state_count > 0:
                             current_operator = game_operator_dict.get(game_name, "") 
-                            initial_matched_owner, initial_game_match, initial_operator_match, initial_manual_check = \
+                            current_state_owner, current_state_game_match, current_state_operator_match, current_state_manual_check = \
                                 self.extract_and_match_results(driver, game_name, current_operator)
-                            # 检查暂停状态 (提取初始结果后)
+                            # 检查暂停状态 (提取当前状态结果后)
                             if self.paused:
                                 df_result.to_excel(new_excel_path, index=False)
-                                self.update_progress(f"提取初始结果时暂停，已保存进度: {new_excel_path}")
-                                # 重置页面并重试整个游戏流程
+                                self.update_progress(f"提取当前状态结果时暂停，已保存进度: {new_excel_path}")
+                                is_state_filtered = False # 重置状态
                                 continue # 跳到下一个游戏
                         else:
-                             self.update_progress("初始结果为0，无需提取详情")
-                             # 默认值已设好
+                             self.update_progress("当前状态结果为0，无需提取详情")
 
-                    except Exception as e_initial_extract:
-                        self.update_progress(f"提取初始结果时出错: {str(e_initial_extract)}")
-                        initial_manual_check = f"是 (提取初始结果异常: {str(e_initial_extract)[:30]}...)"
-                        # 出错时也尝试保存一下获取到的数量（如果有）
-                        try:
-                            initial_result_count = self.get_search_result_count(driver) # 再次尝试获取数量
-                        except: 
-                            initial_result_count = -1 # 标记错误
+                    except Exception as e_current_extract:
+                        self.update_progress(f"提取当前状态结果时出错: {str(e_current_extract)}")
+                        current_state_manual_check = f"是 (提取当前状态结果异常: {str(e_current_extract)[:30]}...)"
+                        try: current_state_count = self.get_search_result_count(driver) # 再次尝试获取数量
+                        except: current_state_count = -1 # 标记错误
+                        # 即使出错，也可能需要根据预期状态进行筛选操作，所以不直接continue
 
-                    self.update_progress(f"初始结果暂存: 数量={initial_result_count}, 匹配版权人='{initial_matched_owner}', ...")
-                    # --- 初始结果提取结束 ---
-                    
-                    # --- 步骤3: 应用筛选条件 --- 
-                    self.update_progress("\n开始应用时间筛选条件...")
-                    # 在每次搜索后应用筛选条件
-                    clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
-                    
-                    # 如果遇到反爬机制并且暂停了，需要等待用户登录后继续
-                    if self.paused:
-                        # 保存当前进度
-                        df_result.to_excel(new_excel_path, index=False)
-                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
-                        
-                        # 重置当前页面并重新尝试
-                        driver.get(search_url)
-                        if not self.wait_for_page_load(driver, timeout=15):
-                            continue
-                            
-                        # 重新尝试点击筛选条件
-                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
-                        if not clicked_filter1:
-                            continue
-                        # 如果确认后继续，需要重置暂停标志
-                        self.paused = False # <-- 确保重置暂停状态
-                    
-                    self.random_delay(0.5, 1) # 减少延迟
-                    clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
-                    
-                    # 同样检查第二个筛选条件是否触发了反爬机制
-                    if self.paused:
-                        # 保存当前进度
-                        df_result.to_excel(new_excel_path, index=False)
-                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
-                        
-                        # 重置当前页面并重新尝试
-                        driver.get(search_url)
-                        if not self.wait_for_page_load(driver, timeout=15):
-                            continue
-                            
-                        # 重新尝试点击前两个筛选条件
-                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
-                        self.random_delay(0.5, 1)
-                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
-                        if not clicked_filter1 or not clicked_filter2:
-                            continue
-                        # 如果确认后继续，需要重置暂停标志
-                        self.paused = False # <-- 确保重置暂停状态
-
-                    # --- 新增点击 '3-5年' ---
-                    self.random_delay(0.5, 1) # 增加点击间隔
-                    clicked_filter3 = self.click_filter_checkbox(driver, '3-5年')
-
-                    # 检查第三个筛选条件是否触发了反爬机制
-                    if self.paused:
-                        # 保存当前进度
-                        df_result.to_excel(new_excel_path, index=False)
-                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
-
-                        # 重置当前页面并重新尝试
-                        driver.get(search_url)
-                        if not self.wait_for_page_load(driver, timeout=15):
-                            continue
-
-                        # 重新尝试点击所有三个筛选条件
-                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
-                        self.random_delay(0.5, 1)
-                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
-                        self.random_delay(0.5, 1)
-                        clicked_filter3 = self.click_filter_checkbox(driver, '3-5年')
-                        if not clicked_filter1 or not clicked_filter2 or not clicked_filter3:
-                            continue
-                        # 如果确认后继续，需要重置暂停标志
-                        self.paused = False # <-- 确保重置暂停状态
-                    # --- 新增结束 ---
-
-                    self.random_delay(1, 2) # 点击后等待页面刷新
-
-                    # 更新成功检查逻辑，包含第三个筛选器
-                    if not clicked_filter1 or not clicked_filter2 or not clicked_filter3:
-                        self.update_progress("警告：未能成功点击所有筛选条件 ('1年内', '1-3年', '3-5年')，结果可能不准确。")
-                    else:
-                        self.update_progress("已成功应用筛选条件 ('1年内', '1-3年', '3-5年')。")
-
-                    # --- 步骤4: 获取筛选后的结果数量 --- 
-                    self.update_progress("\n获取筛选后的结果数量...")
-                    filtered_result_count = self.get_search_result_count(driver)
-                    
-                    # 检查是否因为反爬机制暂停了 (获取筛选后结果数量时)
-                    if self.paused:
-                        # 保存当前进度 (使用之前的初始结果，因为筛选可能未完成或失败)
-                        row_idx = row_indices.get(game_name)
-                        if row_idx is not None:
-                             df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
-                             df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
-                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
-                             df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
-                             df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + " (筛选时暂停)"
-                        df_result.to_excel(new_excel_path, index=False)
-                        self.update_progress(f"获取筛选结果数时暂停，已使用初始结果保存进度: {new_excel_path}")
-                        # 重置页面并重试整个游戏流程
-                        continue # 跳到下一个游戏
-                    
-                    self.update_progress(f"筛选后搜索结果数量: {filtered_result_count}")
-                    
-                    # --- 步骤5: 判断并写入结果 --- 
+                    # --- 步骤3 & 4 & 5: 根据预期状态决定操作并记录结果 ---
                     row_idx = row_indices.get(game_name)
                     if row_idx is None:
-                        self.update_progress(f"警告：未找到游戏 '{game_name}' 在原始Excel中的行索引，无法写入结果")
-                    else:
-                        if filtered_result_count > 0:
-                             self.update_progress("筛选后结果数量 > 0，提取并使用筛选后的结果")
-                             df_result.loc[row_idx, "搜索的结果数量"] = filtered_result_count
+                        self.update_progress(f"警告：未找到游戏 '{game_name}' 在原始Excel中的行索引")
+                        # 如果找不到行，我们仍然需要根据逻辑更新 is_state_filtered 标志
+                        # 否则会影响下一个游戏的判断。这里简化处理：假设操作能完成并更新状态。
+                        # （更健壮的方式是把状态更新放到 try...finally 中确保执行）
+                        # 暂时先按找到行的逻辑走，最后更新 is_state_filtered
+                        pass # 继续下面的逻辑尝试更新状态
+                        
+                    if is_state_filtered:
+                        # === 情况A: 预期页面是已筛选状态 ===
+                        self.update_progress("处理预期为[已筛选]状态的情况...")
+                        if current_state_count > 0:
+                             # A.1: 已筛选状态有结果 -> 直接使用
+                             self.update_progress("当前已筛选状态结果 > 0，直接使用此结果")
+                             if row_idx is not None: # 只有找到行才写入
+                                 df_result.loc[row_idx, "搜索的结果数量"] = current_state_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = current_state_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = current_state_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = current_state_operator_match
+                                 df_result.loc[row_idx, "是否建议人工排查"] = current_state_manual_check
+                                 self.update_progress(f"已更新行 {row_idx} (使用当前已筛选结果)")
+                                 # 下一个游戏开始时，状态依然是已筛选
+                                 next_is_state_filtered = True 
+                        else: # current_state_count == 0 or extraction failed
+                             # A.2: 已筛选状态无结果 (或提取失败) -> 取消筛选并使用取消后的结果
+                             self.update_progress("当前已筛选状态结果为 0 或提取失败，尝试取消筛选...")
+                             # 显式点击筛选器以取消勾选
+                             self.update_progress("尝试点击筛选器以取消...")
+                             clicked_filter1_off = self.click_filter_checkbox(driver, '1年内')
+                             self.random_delay(0.5, 1)
+                             clicked_filter2_off = self.click_filter_checkbox(driver, '1-3年')
+                             self.random_delay(0.5, 1)
+                             clicked_filter3_off = self.click_filter_checkbox(driver, '3-5年')
+                             self.random_delay(1, 2) # 等待页面刷新
+                             
+                             # 检查暂停(取消筛选时)
+                             if self.paused:
+                                 if row_idx is not None: # 保存一下之前的(0结果)状态
+                                      df_result.loc[row_idx, "搜索的结果数量"] = current_state_count # 通常是0
+                                      df_result.loc[row_idx, "匹配著作权人"] = current_state_owner # 通常是""
+                                      df_result.loc[row_idx, "是否建议人工排查"] = current_state_manual_check + " (取消筛选时暂停)"
+                                 df_result.to_excel(new_excel_path, index=False) 
+                                 self.update_progress(f"取消筛选时暂停，已保存进度: {new_excel_path}")
+                                 is_state_filtered = False # 重置状态
+                                 continue
+                             
+                             if not clicked_filter1_off or not clicked_filter2_off or not clicked_filter3_off:
+                                 self.update_progress("警告：取消筛选操作可能未完全成功")
+                             else:
+                                 self.update_progress("已尝试点击取消筛选")
+                             
+                             # 获取取消筛选后的结果
+                             unfiltered_count = 0
+                             unfiltered_owner = ""
+                             unfiltered_game_match = "否"
+                             unfiltered_operator_match = "否"
+                             unfiltered_manual_check = "是"
                              try:
-                                 current_operator = game_operator_dict.get(game_name, "") 
-                                 filtered_matched_owner, filtered_game_match, filtered_operator_match, filtered_manual_check = \
-                                     self.extract_and_match_results(driver, game_name, current_operator)
-                                     
-                                 # 检查暂停状态 (提取筛选后结果时)
-                                 if self.paused:
-                                     # 若提取筛选结果时暂停，也回退到初始结果
-                                     df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
-                                     df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
-                                     df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
-                                     df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
-                                     df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + " (提取筛选结果时暂停)"
+                                 unfiltered_count = self.get_search_result_count(driver)
+                                 if self.paused: raise Exception("获取取消筛选后结果数时暂停") # 主动抛出以便统一处理
+                                 self.update_progress(f"取消筛选后结果数量: {unfiltered_count}")
+                                 if unfiltered_count > 0:
+                                     current_operator = game_operator_dict.get(game_name, "") 
+                                     unfiltered_owner, unfiltered_game_match, unfiltered_operator_match, unfiltered_manual_check = \
+                                         self.extract_and_match_results(driver, game_name, current_operator)
+                                     if self.paused: raise Exception("提取取消筛选后结果时暂停")
+                             except Exception as e_unfilter:
+                                 self.update_progress(f"获取或提取取消筛选后结果时出错: {e_unfilter}")
+                                 unfiltered_manual_check = f"是 (取消筛选后处理异常: {str(e_unfilter)[:30]}...)"
+                                 if self.paused: # 如果是暂停导致的异常
+                                     if row_idx is not None: # 保存一下之前的(0结果)状态
+                                          df_result.loc[row_idx, "搜索的结果数量"] = current_state_count
+                                          df_result.loc[row_idx, "是否建议人工排查"] = current_state_manual_check + " (处理取消筛选结果时暂停)"
                                      df_result.to_excel(new_excel_path, index=False)
-                                     self.update_progress(f"提取筛选结果时暂停，已使用初始结果保存进度: {new_excel_path}")
-                                     continue # 跳到下一个游戏
-                                 
-                                 df_result.loc[row_idx, "匹配著作权人"] = filtered_matched_owner
+                                     self.update_progress(f"处理取消筛选结果时暂停，已保存进度: {new_excel_path}")
+                                     is_state_filtered = False # 重置状态
+                                     continue
+                                     
+                             # 记录取消筛选后的结果
+                             if row_idx is not None:
+                                 df_result.loc[row_idx, "搜索的结果数量"] = unfiltered_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = unfiltered_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = unfiltered_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = unfiltered_operator_match
+                                 df_result.loc[row_idx, "是否建议人工排查"] = unfiltered_manual_check + " (来自取消筛选)"
+                                 self.update_progress(f"已更新行 {row_idx} (使用取消筛选后的结果)")
+                                 # 下一个游戏开始时，状态是未筛选
+                                 next_is_state_filtered = False
+                    else:
+                        # === 情况B: 预期页面是未筛选状态 ===
+                        self.update_progress("处理预期为[未筛选]状态的情况...")
+                        # 先记录下当前的未筛选结果 (即使是0也要记，用于后续对比)
+                        initial_unfiltered_count = current_state_count
+                        initial_unfiltered_owner = current_state_owner
+                        initial_unfiltered_game_match = current_state_game_match
+                        initial_unfiltered_operator_match = current_state_operator_match
+                        initial_unfiltered_manual_check = current_state_manual_check
+                        self.update_progress(f"已记录初始未筛选结果: 数量={initial_unfiltered_count}")
+                        
+                        # 尝试应用筛选
+                        self.update_progress("尝试应用筛选条件...")
+                        clicked_filter1_on = self.click_filter_checkbox(driver, '1年内')
+                        self.random_delay(0.5, 1)
+                        clicked_filter2_on = self.click_filter_checkbox(driver, '1-3年')
+                        self.random_delay(0.5, 1)
+                        clicked_filter3_on = self.click_filter_checkbox(driver, '3-5年')
+                        self.random_delay(1, 2) # 等待页面刷新
+                        
+                        # 检查暂停(应用筛选时)
+                        if self.paused:
+                             if row_idx is not None: # 保存初始结果
+                                 df_result.loc[row_idx, "搜索的结果数量"] = initial_unfiltered_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = initial_unfiltered_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_unfiltered_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_unfiltered_operator_match
+                                 df_result.loc[row_idx, "是否建议人工排查"] = initial_unfiltered_manual_check + " (应用筛选时暂停)"
+                             df_result.to_excel(new_excel_path, index=False)
+                             self.update_progress(f"应用筛选时暂停，已使用初始未筛选结果保存进度: {new_excel_path}")
+                             is_state_filtered = False # 重置状态
+                             continue
+                        
+                        if not clicked_filter1_on or not clicked_filter2_on or not clicked_filter3_on:
+                             self.update_progress("警告：应用筛选操作可能未完全成功")
+                        else:
+                             self.update_progress("已尝试点击应用筛选")
+                             
+                        # 获取显式应用筛选后的结果
+                        filtered_count = 0
+                        filtered_owner = ""
+                        filtered_game_match = "否"
+                        filtered_operator_match = "否"
+                        filtered_manual_check = "是"
+                        try:
+                            filtered_count = self.get_search_result_count(driver)
+                            if self.paused: raise Exception("获取应用筛选后结果数时暂停")
+                            self.update_progress(f"应用筛选后结果数量: {filtered_count}")
+                            if filtered_count > 0:
+                                current_operator = game_operator_dict.get(game_name, "") 
+                                filtered_owner, filtered_game_match, filtered_operator_match, filtered_manual_check = \
+                                    self.extract_and_match_results(driver, game_name, current_operator)
+                                if self.paused: raise Exception("提取应用筛选后结果时暂停")
+                        except Exception as e_filter_on:
+                            self.update_progress(f"获取或提取应用筛选后结果时出错: {e_filter_on}")
+                            filtered_manual_check = f"是 (应用筛选后处理异常: {str(e_filter_on)[:30]}...)"
+                            if self.paused:
+                                if row_idx is not None: # 保存初始结果
+                                    df_result.loc[row_idx, "搜索的结果数量"] = initial_unfiltered_count 
+                                    df_result.loc[row_idx, "匹配著作权人"] = initial_unfiltered_owner
+                                    df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_unfiltered_game_match
+                                    df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_unfiltered_operator_match
+                                    df_result.loc[row_idx, "是否建议人工排查"] = initial_unfiltered_manual_check + " (处理筛选结果时暂停)"
+                                df_result.to_excel(new_excel_path, index=False)
+                                self.update_progress(f"处理应用筛选结果时暂停，已使用初始未筛选结果保存进度: {new_excel_path}")
+                                is_state_filtered = False # 重置状态
+                                continue
+                                
+                        # 判断使用哪个结果
+                        if row_idx is not None: # 只有找到行才写入和更新状态
+                            if filtered_count > 0:
+                                 # B.1: 应用筛选后有结果 -> 使用筛选后的
+                                 self.update_progress("应用筛选后结果 > 0，使用筛选后结果")
+                                 df_result.loc[row_idx, "搜索的结果数量"] = filtered_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = filtered_owner
                                  df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = filtered_game_match
                                  df_result.loc[row_idx, "当前结果与运营单位是否一致"] = filtered_operator_match
                                  df_result.loc[row_idx, "是否建议人工排查"] = filtered_manual_check
-                                 self.update_progress(f"已更新行 {row_idx} 的筛选后匹配结果")
-                                 # 添加详细的匹配结果输出
-                                 self.update_progress(f"筛选后匹配结果: 著作权人='{filtered_matched_owner}', 简称匹配='{filtered_game_match}', 运营单位匹配='{filtered_operator_match}', 人工排查='{filtered_manual_check}'")
-                                 
-                             except Exception as e_filtered_extract:
-                                 self.update_progress(f"提取筛选后结果时出错: {str(e_filtered_extract)}，将回退使用初始结果")
-                                 # 出错则使用初始结果
-                                 df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
-                                 df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
-                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
-                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
-                                 df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + f" (筛选后提取异常: {str(e_filtered_extract)[:20]}...)"
-                                 self.update_progress(f"已更新行 {row_idx} 为筛选前的结果（因筛选后提取异常）")
-                                 
-                        else: # filtered_result_count == 0
-                             self.update_progress("筛选后结果数量为 0，使用筛选前的结果")
-                             df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count # 写入初始数量
-                             df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
-                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
-                             df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
-                             # 修改人工排查建议
-                             manual_check_note = initial_manual_check
-                             if initial_manual_check == "否":
-                                 manual_check_note = "否 (筛选后无结果，使用筛选前数据)"
-                             elif initial_manual_check.startswith("是"):
-                                 # 保留原始的"是"原因，并附加说明
-                                 manual_check_note += " (筛选后无结果)" 
-                             else: # 如果初始就是异常信息等
-                                 manual_check_note += " (筛选后无结果)" 
-                                 
-                             df_result.loc[row_idx, "是否建议人工排查"] = manual_check_note
-                             self.update_progress(f"已更新行 {row_idx} 为筛选前的结果")
-                             # 添加详细的匹配结果输出 (使用筛选前数据)
-                             self.update_progress(f"使用筛选前匹配结果: 著作权人='{initial_matched_owner}', 简称匹配='{initial_game_match}', 运营单位匹配='{initial_operator_match}', 人工排查='{manual_check_note}'")
+                                 self.update_progress(f"已更新行 {row_idx} (使用应用筛选后的结果)")
+                                 # 下一个游戏开始时，状态是已筛选
+                                 next_is_state_filtered = True
+                            else: # filtered_count == 0
+                                 # B.2: 应用筛选后无结果 -> 使用初始未筛选的
+                                 self.update_progress("应用筛选后结果为 0，回退使用初始未筛选结果")
+                                 df_result.loc[row_idx, "搜索的结果数量"] = initial_unfiltered_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = initial_unfiltered_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_unfiltered_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_unfiltered_operator_match
+                                 # 修改人工排查建议以反映情况
+                                 manual_check_note = initial_unfiltered_manual_check
+                                 if manual_check_note == "否": manual_check_note = "否 (筛选后无结果，使用筛选前数据)"
+                                 elif manual_check_note.startswith("是"): manual_check_note += " (筛选后无结果)"
+                                 else: manual_check_note += " (筛选后无结果)"
+                                 df_result.loc[row_idx, "是否建议人工排查"] = manual_check_note
+                                 self.update_progress(f"已更新行 {row_idx} (使用初始未筛选结果)")
+                                 # 下一个游戏开始时，状态是未筛选 (因为筛选尝试失败了)
+                                 next_is_state_filtered = False
+                        else: # row_idx is None
+                            # 如果没找到行，无法写入，但需要猜测下一个状态
+                            # 保守起见，假设如果尝试应用筛选，状态会变；如果尝试取消，状态也会变
+                            if filtered_count > 0: # B.1发生
+                                next_is_state_filtered = True
+                            else: # B.2发生
+                                next_is_state_filtered = False
+                                
+                    # 在循环末尾更新状态标记，供下一次迭代使用
+                    is_state_filtered = next_is_state_filtered
+                    
+                    # --- 原来的步骤4/5 (获取筛选后数量/判断写入) 被上面的逻辑覆盖，移除或注释 --- 
+                    # self.update_progress("\\n获取筛选后的结果数量...")
 
                     # 保存中间结果
                     if (i + 1) % 5 == 0 or i == total_games - 1:
