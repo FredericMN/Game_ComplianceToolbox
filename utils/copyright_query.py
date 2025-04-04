@@ -807,8 +807,54 @@ class CopyrightQuery:
                                 df_result.loc[row_idx, "是否建议人工排查"] = "是 (页面加载失败)"
                             continue
                     
+                    # --- 步骤1 & 2: 提取并暂存无筛选结果 --- 
+                    self.update_progress("开始提取无筛选时的初始结果...")
+                    initial_result_count = 0
+                    initial_matched_owner = ""
+                    initial_game_match = "否"
+                    initial_operator_match = "否"
+                    initial_manual_check = "是"
+                    
+                    try:
+                        initial_result_count = self.get_search_result_count(driver)
+                        # 检查暂停状态 (获取初始结果数后)
+                        if self.paused:
+                            df_result.to_excel(new_excel_path, index=False)
+                            self.update_progress(f"获取初始结果数时暂停，已保存进度: {new_excel_path}")
+                            # 重置页面并重试整个游戏流程
+                            continue # 跳到下一个游戏
+                        
+                        self.update_progress(f"无筛选时初始结果数量: {initial_result_count}")
+                        
+                        if initial_result_count > 0:
+                            current_operator = game_operator_dict.get(game_name, "") 
+                            initial_matched_owner, initial_game_match, initial_operator_match, initial_manual_check = \
+                                self.extract_and_match_results(driver, game_name, current_operator)
+                            # 检查暂停状态 (提取初始结果后)
+                            if self.paused:
+                                df_result.to_excel(new_excel_path, index=False)
+                                self.update_progress(f"提取初始结果时暂停，已保存进度: {new_excel_path}")
+                                # 重置页面并重试整个游戏流程
+                                continue # 跳到下一个游戏
+                        else:
+                             self.update_progress("初始结果为0，无需提取详情")
+                             # 默认值已设好
+
+                    except Exception as e_initial_extract:
+                        self.update_progress(f"提取初始结果时出错: {str(e_initial_extract)}")
+                        initial_manual_check = f"是 (提取初始结果异常: {str(e_initial_extract)[:30]}...)"
+                        # 出错时也尝试保存一下获取到的数量（如果有）
+                        try:
+                            initial_result_count = self.get_search_result_count(driver) # 再次尝试获取数量
+                        except: 
+                            initial_result_count = -1 # 标记错误
+
+                    self.update_progress(f"初始结果暂存: 数量={initial_result_count}, 匹配版权人='{initial_matched_owner}', ...")
+                    # --- 初始结果提取结束 ---
+                    
+                    # --- 步骤3: 应用筛选条件 --- 
+                    self.update_progress("\n开始应用时间筛选条件...")
                     # 在每次搜索后应用筛选条件
-                    self.update_progress("应用筛选条件...")
                     clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
                     
                     # 如果遇到反爬机制并且暂停了，需要等待用户登录后继续
@@ -887,86 +933,90 @@ class CopyrightQuery:
                     else:
                         self.update_progress("已成功应用筛选条件 ('1年内', '1-3年', '3-5年')。")
 
-                    # 获取搜索结果数量 (应用筛选后)
-                    result_count = self.get_search_result_count(driver)
+                    # --- 步骤4: 获取筛选后的结果数量 --- 
+                    self.update_progress("\n获取筛选后的结果数量...")
+                    filtered_result_count = self.get_search_result_count(driver)
                     
-                    # 检查是否因为反爬机制暂停了 (获取结果数量后)
+                    # 检查是否因为反爬机制暂停了 (获取筛选后结果数量时)
                     if self.paused:
-                        # 保存当前进度
+                        # 保存当前进度 (使用之前的初始结果，因为筛选可能未完成或失败)
+                        row_idx = row_indices.get(game_name)
+                        if row_idx is not None:
+                             df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
+                             df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
+                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
+                             df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
+                             df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + " (筛选时暂停)"
                         df_result.to_excel(new_excel_path, index=False)
-                        self.update_progress(f"已保存当前进度到: {new_excel_path}")
-                        
-                        # 重置当前页面并重新尝试整个流程
-                        driver.get(search_url)
-                        if not self.wait_for_page_load(driver, timeout=15):
-                            continue
-                            
-                        # 重新尝试整个筛选和获取结果数量过程
-                        clicked_filter1 = self.click_filter_checkbox(driver, '1年内')
-                        self.random_delay(0.5, 1)
-                        clicked_filter2 = self.click_filter_checkbox(driver, '1-3年')
-                        self.random_delay(0.5, 1)
-                        clicked_filter3 = self.click_filter_checkbox(driver, '3-5年') # 别忘了这里也要重试
-                        self.random_delay(1, 2)
-                        result_count = self.get_search_result_count(driver)
-                        
-                        # 如果再次暂停，跳过当前游戏
-                        if self.paused: 
-                            continue
-                        # 如果确认后继续，需要重置暂停标志
-                        self.paused = False # <-- 确保重置暂停状态
-
-                    self.update_progress(f"筛选后搜索结果数量: {result_count}")
+                        self.update_progress(f"获取筛选结果数时暂停，已使用初始结果保存进度: {new_excel_path}")
+                        # 重置页面并重试整个游戏流程
+                        continue # 跳到下一个游戏
                     
-                    matched_copyright_owner = ""
-                    is_game_name_match = "否"
-                    is_operator_match = "否"
-                    recommend_manual_check = "是"
+                    self.update_progress(f"筛选后搜索结果数量: {filtered_result_count}")
                     
+                    # --- 步骤5: 判断并写入结果 --- 
                     row_idx = row_indices.get(game_name)
-                    
-                    if row_idx is not None:
-                        df_result.loc[row_idx, "搜索的结果数量"] = result_count
-                        self.update_progress(f"已更新行 {row_idx} 的搜索结果数量: {result_count}")
-                        
-                        if result_count > 0:
-                            self.update_progress("开始解析和匹配搜索结果...")
-                            current_operator = game_operator_dict.get(game_name, "") 
-                            matched_copyright_owner, is_game_name_match, is_operator_match, recommend_manual_check = \
-                                self.extract_and_match_results(driver, game_name, current_operator)
-                            
-                            # 检查是否因为反爬机制暂停了
-                            if self.paused:
-                                # 保存当前进度
-                                df_result.to_excel(new_excel_path, index=False)
-                                self.update_progress(f"已保存当前进度到: {new_excel_path}")
-                                
-                                # 重置当前页面并重新尝试整个流程
-                                continue # 跳到下一个游戏的处理
-                            
-                            df_result.loc[row_idx, "匹配著作权人"] = matched_copyright_owner
-                            df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = is_game_name_match
-                            df_result.loc[row_idx, "当前结果与运营单位是否一致"] = is_operator_match
-                            df_result.loc[row_idx, "是否建议人工排查"] = recommend_manual_check
-                            self.update_progress(f"已更新行 {row_idx} 的匹配结果")
-                            
-                            # 添加详细的匹配结果输出
-                            self.update_progress(f"匹配结果: 著作权人='{matched_copyright_owner}', " +
-                                               f"简称匹配='{is_game_name_match}', " + 
-                                               f"运营单位匹配='{is_operator_match}', " + 
-                                               f"人工排查='{recommend_manual_check}'")
-                        else:
-                            self.update_progress("搜索结果为0，标记建议人工排查")
-                            df_result.loc[row_idx, "是否建议人工排查"] = "是"
-                            df_result.loc[row_idx, "匹配著作权人"] = ""
-                            df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = "否"
-                            df_result.loc[row_idx, "当前结果与运营单位是否一致"] = "否"
-                            
-                            # 添加零结果的匹配输出
-                            self.update_progress(f"匹配结果: 著作权人='', 简称匹配='否', 运营单位匹配='否', 人工排查='是'")
-
+                    if row_idx is None:
+                        self.update_progress(f"警告：未找到游戏 '{game_name}' 在原始Excel中的行索引，无法写入结果")
                     else:
-                        self.update_progress(f"警告：未找到游戏 '{game_name}' 在原始Excel中的行索引")
+                        if filtered_result_count > 0:
+                             self.update_progress("筛选后结果数量 > 0，提取并使用筛选后的结果")
+                             df_result.loc[row_idx, "搜索的结果数量"] = filtered_result_count
+                             try:
+                                 current_operator = game_operator_dict.get(game_name, "") 
+                                 filtered_matched_owner, filtered_game_match, filtered_operator_match, filtered_manual_check = \
+                                     self.extract_and_match_results(driver, game_name, current_operator)
+                                     
+                                 # 检查暂停状态 (提取筛选后结果时)
+                                 if self.paused:
+                                     # 若提取筛选结果时暂停，也回退到初始结果
+                                     df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
+                                     df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
+                                     df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
+                                     df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
+                                     df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + " (提取筛选结果时暂停)"
+                                     df_result.to_excel(new_excel_path, index=False)
+                                     self.update_progress(f"提取筛选结果时暂停，已使用初始结果保存进度: {new_excel_path}")
+                                     continue # 跳到下一个游戏
+                                 
+                                 df_result.loc[row_idx, "匹配著作权人"] = filtered_matched_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = filtered_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = filtered_operator_match
+                                 df_result.loc[row_idx, "是否建议人工排查"] = filtered_manual_check
+                                 self.update_progress(f"已更新行 {row_idx} 的筛选后匹配结果")
+                                 # 添加详细的匹配结果输出
+                                 self.update_progress(f"筛选后匹配结果: 著作权人='{filtered_matched_owner}', 简称匹配='{filtered_game_match}', 运营单位匹配='{filtered_operator_match}', 人工排查='{filtered_manual_check}'")
+                                 
+                             except Exception as e_filtered_extract:
+                                 self.update_progress(f"提取筛选后结果时出错: {str(e_filtered_extract)}，将回退使用初始结果")
+                                 # 出错则使用初始结果
+                                 df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count 
+                                 df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
+                                 df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
+                                 df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
+                                 df_result.loc[row_idx, "是否建议人工排查"] = initial_manual_check + f" (筛选后提取异常: {str(e_filtered_extract)[:20]}...)"
+                                 self.update_progress(f"已更新行 {row_idx} 为筛选前的结果（因筛选后提取异常）")
+                                 
+                        else: # filtered_result_count == 0
+                             self.update_progress("筛选后结果数量为 0，使用筛选前的结果")
+                             df_result.loc[row_idx, "搜索的结果数量"] = initial_result_count # 写入初始数量
+                             df_result.loc[row_idx, "匹配著作权人"] = initial_matched_owner
+                             df_result.loc[row_idx, "当前结果与游戏简称是否一致"] = initial_game_match
+                             df_result.loc[row_idx, "当前结果与运营单位是否一致"] = initial_operator_match
+                             # 修改人工排查建议
+                             manual_check_note = initial_manual_check
+                             if initial_manual_check == "否":
+                                 manual_check_note = "否 (筛选后无结果，使用筛选前数据)"
+                             elif initial_manual_check.startswith("是"):
+                                 # 保留原始的"是"原因，并附加说明
+                                 manual_check_note += " (筛选后无结果)" 
+                             else: # 如果初始就是异常信息等
+                                 manual_check_note += " (筛选后无结果)" 
+                                 
+                             df_result.loc[row_idx, "是否建议人工排查"] = manual_check_note
+                             self.update_progress(f"已更新行 {row_idx} 为筛选前的结果")
+                             # 添加详细的匹配结果输出 (使用筛选前数据)
+                             self.update_progress(f"使用筛选前匹配结果: 著作权人='{initial_matched_owner}', 简称匹配='{initial_game_match}', 运营单位匹配='{initial_operator_match}', 人工排查='{manual_check_note}'")
 
                     # 保存中间结果
                     if (i + 1) % 5 == 0 or i == total_games - 1:
