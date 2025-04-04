@@ -435,48 +435,73 @@ class CopyrightQuery:
                 short_name = "-"
                 owner = ""
                 try:
-                    # --- 提取软件简称 --- (恢复之前成功的方法)
+                    # --- 提取软件简称 --- (修改后：提取span.val的完整文本)
                     self.update_progress("\n开始提取软件简称...")
+                    short_name = "-" # 默认值
                     try:
-                        # 使用之前成功的XPath表达式
-                        em_elements = row.find_elements(By.XPATH, ".//span[contains(text(), '软件简称')]/following-sibling::span[contains(@class, 'val')]/em")
-                        if em_elements:
-                            # 如果找到em标签，获取所有em标签内容并拼接
-                            em_texts = [em.text for em in em_elements]
-                            self.update_progress(f"<em>标签内容: {em_texts}")
-                            short_name = "".join(em_texts)
-                            self.update_progress(f"从<em>标签提取简称: '{short_name}'")
+                        # 尝试主要XPath查找包含软件简称的span.val
+                        # XPath解释：查找任意包含 '软件简称' 文本的 span，然后找它后面紧跟着的 class 包含 'val' 的 span
+                        val_span_xpath = ".//span[contains(text(), '软件简称')]/following-sibling::span[contains(@class, 'val')]"
+                        val_elements = row.find_elements(By.XPATH, val_span_xpath)
+
+                        if val_elements:
+                            # 获取第一个找到的span.val的完整文本内容
+                            # .text 属性会获取元素及其所有子元素的可见文本
+                            short_name = val_elements[0].text.strip()
+                            self.update_progress(f"通过主要XPath找到span.val，提取到完整简称: '{short_name}'")
                         else:
-                            # 尝试使用稍微宽松的XPath查找span.val
-                            val_elements = row.find_elements(By.XPATH, ".//span[contains(text(), '软件简称')]/following-sibling::span[contains(@class, 'val')]")
-                            if val_elements:
-                                val_text = val_elements[0].text.strip()
-                                self.update_progress(f"从span.val直接获取文本: '{val_text}'")
-                                short_name = val_text
-                            else:
-                                # 第二个备选方法：尝试寻找包含"软件简称"的span.f
-                                try:
-                                    label_spans = row.find_elements(By.XPATH, ".//span[@class='f']")
-                                    for label_span in label_spans:
-                                        if "软件简称" in label_span.text:
-                                            # 找到对应的span.val
+                            # 如果主要XPath找不到，尝试备选方法：查找包含"软件简称"的span.f，再找其兄弟span.val
+                            self.update_progress("主要XPath未找到span.val，尝试备选方法...")
+                            try:
+                                # 查找所有 class='f' 的 span
+                                label_spans = row.find_elements(By.XPATH, ".//span[@class='f']")
+                                found_backup = False
+                                for label_span in label_spans:
+                                    # 检查哪个标签包含"软件简称"
+                                    if "软件简称" in label_span.text:
+                                        # 找到标签后，尝试寻找对应的数值 span (span.val)
+                                        try:
+                                            # 尝试1：作为直接的兄弟节点
+                                            # ./following-sibling:: 表示查找当前节点之后的兄弟节点
                                             val_span = label_span.find_element(By.XPATH, "./following-sibling::span[contains(@class, 'val')]")
-                                            val_text = val_span.text.strip()
-                                            self.update_progress(f"使用备选方法获取简称: '{val_text}'")
-                                            short_name = val_text
-                                            break
-                                except Exception as e_backup:
-                                    self.update_progress(f"备选方法失败: {str(e_backup)}")
-                                    short_name = "-"
+                                            short_name = val_span.text.strip() # 获取完整文本
+                                            self.update_progress(f"通过备选方法(直接兄弟)找到span.val，提取到完整简称: '{short_name}'")
+                                            found_backup = True
+                                            break # 找到就跳出循环
+                                        except NoSuchElementException:
+                                            # 尝试2：作为父级 div 的兄弟 span.val (处理可能的嵌套结构)
+                                            try:
+                                                 # ./parent::div 找到直接的父级 div 元素
+                                                 parent_div = label_span.find_element(By.XPATH, "./parent::div")
+                                                 # 再从父级 div 查找兄弟 span.val
+                                                 val_span = parent_div.find_element(By.XPATH, "./following-sibling::span[contains(@class, 'val')]")
+                                                 short_name = val_span.text.strip() # 获取完整文本
+                                                 self.update_progress(f"通过备选方法(父级兄弟)找到span.val，提取到完整简称: '{short_name}'")
+                                                 found_backup = True
+                                                 break # 找到就跳出循环
+                                            except NoSuchElementException:
+                                                # 如果两种结构都没找到，记录一下信息，继续检查下一个可能的标签span
+                                                self.update_progress(f"备选方法在标签 '{label_span.text[:20]}...' 处未找到对应的span.val")
+                                                continue
+
+                                if not found_backup:
+                                     self.update_progress("备选方法也未能找到简称对应的span.val")
+
+                            except Exception as e_backup:
+                                self.update_progress(f"执行备选提取方法时出错: {str(e_backup)}")
+                                # 出错则保持 short_name 为 "-"
+
+                        # 最终清理，如果提取结果为空字符串，也设为"-"
+                        if not short_name or short_name.strip() == "":
+                            short_name = "-"
+                            self.update_progress("提取到的简称为空，重置为 '-'")
+
                     except Exception as e_sn:
-                        self.update_progress(f"提取软件简称失败: {str(e_sn)}")
-                        short_name = "-"
-                        
-                    # 最终清理和规范化
-                    if not short_name or short_name.strip() == "" or short_name.strip() == "-":
-                        short_name = "-"
-                    
-                    self.update_progress(f"最终确定的简称: '{short_name}'")
+                        # 捕获整个提取简称过程中的任何异常
+                        self.update_progress(f"提取软件简称时发生异常: {str(e_sn)}")
+                        short_name = "-" # 确保异常时为默认值 "-"
+
+                    self.update_progress(f"最终确定的用于匹配的简称: '{short_name}'")
 
                     # --- 提取著作权人 --- (逻辑不变)
                     try:
