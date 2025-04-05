@@ -28,8 +28,8 @@ def get_app_root():
 CONFIG_PATH = os.path.join(get_app_root(), 'config.json')
 CACHE_PATH = os.path.join(get_app_root(), 'version_cache.json')
 
-# 默认GitHub令牌
-DEFAULT_TOKEN = "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"
+# 移除无效的默认令牌
+# DEFAULT_TOKEN = "github_pat_..."
 
 # 缓存有效期（小时）
 CACHE_LIFETIME = 1
@@ -52,10 +52,8 @@ def load_config():
                 return json.load(f)
         except Exception as e:
             print(f"加载配置失败: {str(e)}")
-    # 创建默认配置
-    default_config = {"github_token": DEFAULT_TOKEN}
-    save_config(default_config)
-    return default_config
+    # 如果文件不存在或加载失败，返回一个不含令牌的默认字典
+    return {"github_token": None}
 
 def save_version_cache(version_data):
     """保存版本信息到缓存"""
@@ -153,17 +151,19 @@ class VersionChecker:
         
         for attempt in range(3):
             try:
-                # 构建请求头，加入令牌
-                token = self.config.get("github_token", "")
+                # 构建请求头，根据是否有令牌决定是否添加 Authorization
+                token = self.config.get("github_token") # 从加载的配置中获取令牌
                 headers = {
                     'Accept': 'application/vnd.github+json'
                 }
                 
+                # 只有在令牌存在且非空时才添加到请求头
                 if token:
                     print(f"诊断: 使用令牌 {token[:5]}...{token[-5:]}")
                     headers['Authorization'] = f'token {token}'
                 else:
-                    print("诊断: 未找到有效令牌")
+                    # 如果没有令牌，进行匿名访问
+                    print("诊断: 未提供令牌，使用匿名访问 (速率限制较低)")
                 
                 print(f"诊断: 请求 (第{attempt+1}次尝试)")
                 response = requests.get(url, timeout=(5, 30),
