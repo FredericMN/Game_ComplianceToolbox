@@ -232,28 +232,54 @@ def crawl_new_games(
 
                 man="未知厂商"
                 try:
-                    WebDriverWait(driver,5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR,
-                            "div.single-info__content"))
+                    # 等待包含厂商/发行/开发信息的父容器加载
+                    # 使用 'div.row-card.app-intro' 作为更可靠的等待目标
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.row-card.app-intro"))
                     )
-                    blocks=driver.find_elements(By.CSS_SELECTOR,"div.single-info__content")
-                    priority=["厂商","发行","发行商","开发"]
-                    info_dict={}
-                    for b in blocks:
+                    
+                    # 查找所有可能的厂商/发行/开发信息块
+                    # 这些信息通常位于 <a> 标签内，包含一个标签名 (厂商/发行/开发) 和对应的值
+                    # 选择器 'div.flex-center--y a.tap-router' 定位到这些链接
+                    info_elements = driver.find_elements(By.CSS_SELECTOR, "div.flex-center--y a.tap-router")
+                    
+                    # 创建一个字典来存储找到的标签和对应的值
+                    possible_publishers = {}
+                    for elem in info_elements:
                         try:
-                            lab=b.find_element(
-                                By.CSS_SELECTOR,".caption-m12-w12").text.strip()
-                            val=b.find_element(
-                                By.CSS_SELECTOR,".single-info__content__value").text.strip()
-                            info_dict[lab]=val
-                        except:
-                            pass
-                    for pk in priority:
-                        if pk in info_dict:
-                            man=info_dict[pk]
-                            break
-                except:
-                    pass
+                            # 尝试提取标签名 (如 "厂商", "开发", "发行")
+                            # 标签名位于 class 包含 'gray-06' 和 'mr-6' 的 div 中
+                            label_element = elem.find_element(By.CSS_SELECTOR, "div.gray-06.mr-6")
+                            label = label_element.text.strip()
+                            
+                            # 尝试提取对应的值 (公司名称)
+                            # 公司名位于 class 包含 'tap-text' 和 'tap-text__one-line' 的 div 中
+                            value_element = elem.find_element(By.CSS_SELECTOR, "div.tap-text.tap-text__one-line")
+                            value = value_element.text.strip()
+                            
+                            # 如果成功提取到标签和值，则存入字典
+                            if label and value:
+                                possible_publishers[label] = value
+                                
+                        except Exception:
+                            # 如果在处理某个元素时出错（例如，结构不匹配），则忽略该元素，继续处理下一个
+                            continue 
+                            
+                    # 应用优先级逻辑选择厂商名称
+                    # 定义期望的标签及其优先级顺序
+                    priority = ["厂商", "发行", "开发"]
+                    for key in priority:
+                        # 检查字典中是否存在当前优先级的标签
+                        if key in possible_publishers:
+                            # 如果找到，则使用对应的值作为厂商名称，并停止查找
+                            man = possible_publishers[key]
+                            break 
+
+                except Exception as e:
+                    # 如果在等待或查找元素的整体过程中发生异常 (例如超时)，
+                    # 则保留默认值 "未知厂商"，可以选择性地记录日志
+                    # progress_log_callback(progress_callback, f"提取厂商信息时出错: {e}")
+                    pass # 保留默认值
 
                 driver.close()
                 driver.switch_to.window(driver.window_handles[0])
@@ -361,7 +387,7 @@ def match_version_numbers(
     - 如果 create_new_file=True => 基于原文件创建副本，并在副本上进行后续操作
     - 如果 create_new_file=False => 在同文件追加
     - 分段输出(每2~3行)
-    - 需添加表头: [ "游戏名称", "出版单位", "运营单位", "文号", "出版物号", "时间", "游戏类型", "申报类别", "是否多个结果" ]
+    - 需添加表头: [ "游戏名称", "出版单位", "运营单位", "文号", "出版物号", "版号获批时间", "游戏类型", "申报类别", "是否多个结果" ]
     """
     import shutil  # 用于复制文件
 
@@ -403,7 +429,7 @@ def match_version_numbers(
     ws = wb.active
     new_headers = [
         "游戏名称","出版单位","运营单位","文号","出版物号",
-        "时间","游戏类型","申报类别","是否多个结果"
+        "版号获批时间","游戏类型","申报类别","是否多个结果"
     ]
     current_cols = [c.value for c in ws[1]]
     for nh in new_headers:
@@ -454,7 +480,7 @@ def match_version_numbers(
         "运营单位",   # info[2]
         "文号",       # info[3]
         "出版物号",   # info[4]
-        "时间",       # info[5]
+        "版号获批时间", # info[5]
         "游戏类型",   # info[6]
         "申报类别",   # info[7]
         "是否多个结果" # info[8]
@@ -646,7 +672,7 @@ def match_version_numbers(
                             f"  运营单位：{info[2]}",
                             f"  文号：{info[3]}",
                             f"  出版物号：{info[4]}",
-                            f"  时间：{info[5]}",
+                            f"  版号获批时间：{info[5]}",
                             f"  游戏类型：{info[6]}",
                             f"  申报类别：{info[7]}",
                             f"  是否多个结果：{info[8]}"
